@@ -182,6 +182,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Gateway tab: All Gateways
   document.querySelector('.gateway-tab[data-gateway=""]').addEventListener('click', () => {
     selectGateway(null);
+    collapseGatewaySelector();
+  });
+
+  // Gateway expand/collapse
+  document.getElementById('gateway-expand-btn').addEventListener('click', toggleGatewayExpand);
+  document.addEventListener('click', (e) => {
+    const selector = document.querySelector('.gateway-selector');
+    const btn = document.getElementById('gateway-expand-btn');
+    if (selector.classList.contains('expanded') && !selector.contains(e.target) && !btn.contains(e.target)) {
+      collapseGatewaySelector();
+    }
   });
 
   // Auto-refresh every 30 seconds
@@ -263,10 +274,17 @@ function renderGatewayTabs() {
   `).join('');
 
   container.querySelectorAll('.gateway-tab').forEach(tab => {
-    tab.addEventListener('click', () => selectGateway(tab.dataset.gateway));
+    tab.addEventListener('click', () => {
+      selectGateway(tab.dataset.gateway);
+      collapseGatewaySelector();
+    });
   });
 
-  // Apply saved gateway selection
+  applyGatewayActiveState();
+  updateExpandBtnVisibility();
+}
+
+function applyGatewayActiveState() {
   if (selectedGateway && gateways.some(gw => gw.gateway_id === selectedGateway)) {
     document.querySelectorAll('.gateway-tab').forEach(tab => {
       const isActive = (tab.dataset.gateway || null) === selectedGateway;
@@ -274,17 +292,33 @@ function renderGatewayTabs() {
     });
   } else {
     selectedGateway = null;
-    document.querySelector('.gateway-tab[data-gateway=""]')?.classList.add('active');
+    document.querySelectorAll('.gateway-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.gateway === '');
+    });
   }
+}
+
+function updateExpandBtnVisibility() {
+  const btn = document.getElementById('gateway-expand-btn');
+  btn.style.display = gateways.length > 0 ? '' : 'none';
+}
+
+function toggleGatewayExpand() {
+  const selector = document.querySelector('.gateway-selector');
+  const btn = document.getElementById('gateway-expand-btn');
+  selector.classList.toggle('expanded');
+  btn.classList.toggle('expanded');
+}
+
+function collapseGatewaySelector() {
+  document.querySelector('.gateway-selector').classList.remove('expanded');
+  document.getElementById('gateway-expand-btn').classList.remove('expanded');
 }
 
 function selectGateway(gatewayId) {
   selectedGateway = gatewayId;
   saveSelectedGateway();
-  document.querySelectorAll('.gateway-tab').forEach(tab => {
-    const isActive = (tab.dataset.gateway || null) === gatewayId;
-    tab.classList.toggle('active', isActive);
-  });
+  applyGatewayActiveState();
   loadAllData();
 }
 
@@ -765,12 +799,6 @@ function formatAirtime(ms) {
 
 function formatTime(timestamp) {
   return parseUTCTimestamp(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function formatNumber(n) {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return n.toString();
 }
 
 function formatPercent(p) {

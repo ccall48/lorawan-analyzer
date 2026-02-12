@@ -54,9 +54,12 @@
 
     <!-- Gateway Filter -->
     <div class="bg-white/5 border-b border-white/10 px-6 flex-shrink-0">
-      <div class="flex items-center gap-1 py-1 overflow-x-auto">
+      <div class="gateway-selector flex items-center gap-1 py-1">
         <button class="gateway-tab active px-3 py-1 rounded text-xs" data-gateway="">All Gateways</button>
         <div id="gateway-tabs" class="flex gap-1"></div>
+        <button id="gateway-expand-btn" class="gateway-expand-btn px-2 py-1 ml-auto" title="Show all gateways">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
       </div>
     </div>
 
@@ -64,6 +67,7 @@
     <div id="live-feed-container" class="flex flex-col flex-1 min-h-0"></div>
   </div>
 
+  <script src="utils.js"></script>
   <script src="packet-feed.js"></script>
   <script src="live.js"></script>
 </body>

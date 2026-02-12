@@ -638,12 +638,6 @@ async function loadRecentPacketsForDevice() {
 }
 
 // Formatters
-function formatNumber(n) {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return n.toString();
-}
-
 function formatPercent(p) {
   if (p === 0) return '0%';
   if (p >= 1) return `${p.toFixed(2)}%`;

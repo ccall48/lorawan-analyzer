@@ -94,6 +94,49 @@ body {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* Gateway selector: collapsed = single row, clipped */
+.gateway-selector {
+  flex-wrap: nowrap;
+}
+
+#gateway-tabs {
+  overflow: hidden;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+/* Expanded: wrap onto multiple lines */
+.gateway-selector.expanded {
+  flex-wrap: wrap;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.gateway-selector.expanded #gateway-tabs {
+  overflow: visible;
+  flex-wrap: wrap;
+}
+
+/* Expand button */
+.gateway-expand-btn {
+  color: rgba(255, 255, 255, 0.5);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+}
+
+.gateway-expand-btn:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.gateway-expand-btn.expanded svg {
+  transform: rotate(180deg);
+}
+
 /* Stat Cards */
 .stat-card {
   background: rgba(255, 255, 255, 0.05);
