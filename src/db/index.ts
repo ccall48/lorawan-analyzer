@@ -1,28 +1,28 @@
-import { createClient, ClickHouseClient } from '@clickhouse/client';
-import type { ClickHouseConfig } from '../types.js';
+import postgres from 'postgres';
+import type { PostgresConfig } from '../types.js';
 
-let client: ClickHouseClient | null = null;
+let sql: ReturnType<typeof postgres> | null = null;
 
-export function initClickHouse(config: ClickHouseConfig): ClickHouseClient {
-  client = createClient({
-    url: config.url,
-    database: config.database,
-    username: 'default',
-    password: '',
+export function initPostgres(config: PostgresConfig): ReturnType<typeof postgres> {
+  sql = postgres(config.url, {
+    max: 10,
+    idle_timeout: 30,
+    connect_timeout: 30,
+    onnotice: () => {},
   });
-  return client;
+  return sql;
 }
 
-export function getClickHouse(): ClickHouseClient {
-  if (!client) {
-    throw new Error('ClickHouse client not initialized');
+export function getDb(): ReturnType<typeof postgres> {
+  if (!sql) {
+    throw new Error('Postgres client not initialized');
   }
-  return client;
+  return sql;
 }
 
-export async function closeClickHouse(): Promise<void> {
-  if (client) {
-    await client.close();
-    client = null;
+export async function closePostgres(): Promise<void> {
+  if (sql) {
+    await sql.end();
+    sql = null;
   }
 }

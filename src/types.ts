@@ -1,6 +1,6 @@
 export interface Config {
   mqtt: MqttConfig;
-  clickhouse: ClickHouseConfig;
+  postgres: PostgresConfig;
   api: ApiConfig;
   operators: OperatorMapping[];
   hide_rules: HideRule[];
@@ -23,9 +23,8 @@ export interface MqttDownlinkSource {
   format: 'protobuf' | 'json';
 }
 
-export interface ClickHouseConfig {
+export interface PostgresConfig {
   url: string;
-  database: string;
 }
 
 export interface ApiConfig {
@@ -92,6 +91,8 @@ export interface LivePacket {
 export interface GatewayStats {
   gateway_id: string;
   name: string | null;
+  alias: string | null;
+  group_name: string | null;
   first_seen: Date;
   last_seen: Date;
   packet_count: number;

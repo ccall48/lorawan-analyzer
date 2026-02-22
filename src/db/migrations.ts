@@ -1,118 +1,132 @@
-import { getClickHouse } from './index.js';
+import { getDb } from './index.js';
 
 export async function runMigrations(): Promise<void> {
-  const client = getClickHouse();
+  const sql = getDb();
 
   console.log('Running database migrations...');
 
-  // Create packets table
-  await client.command({
-    query: `
-      CREATE TABLE IF NOT EXISTS packets (
-        timestamp DateTime64(3),
-        gateway_id LowCardinality(String),
-        packet_type LowCardinality(String),
-        dev_addr Nullable(String),
-        join_eui Nullable(String),
-        dev_eui Nullable(String),
-        operator LowCardinality(String),
-        frequency UInt32,
-        spreading_factor Nullable(UInt8),
-        bandwidth UInt32,
-        rssi Int16,
-        snr Float32,
-        payload_size UInt16,
-        airtime_us UInt32,
-        f_cnt Nullable(UInt32),
-        f_port Nullable(UInt8),
-        confirmed Nullable(Bool) DEFAULT NULL,
-        session_id Nullable(String) DEFAULT NULL
+  await sql`
+    CREATE OR REPLACE FUNCTION dev_addr_uint32(addr TEXT) RETURNS BIGINT AS $$
+      SELECT (
+        get_byte(decode(addr, 'hex'), 3)::bigint |
+        get_byte(decode(addr, 'hex'), 2)::bigint << 8 |
+        get_byte(decode(addr, 'hex'), 1)::bigint << 16 |
+        get_byte(decode(addr, 'hex'), 0)::bigint << 24
       )
-      ENGINE = MergeTree()
-      PARTITION BY toYYYYMMDD(timestamp)
-      ORDER BY (gateway_id, timestamp)
-      TTL timestamp + INTERVAL 7 DAY
-    `,
-  });
-  console.log('  Created packets table');
+    $$ LANGUAGE SQL IMMUTABLE
+  `;
 
-  // Add confirmed column if it doesn't exist (migration for existing tables)
-  try {
-    await client.command({
-      query: `ALTER TABLE packets ADD COLUMN IF NOT EXISTS confirmed Nullable(Bool) DEFAULT NULL`,
-    });
-    console.log('  Added confirmed column to packets table');
-  } catch {
-    // Column might already exist or ALTER not supported - ignore
-  }
+  await sql`
+    CREATE TABLE IF NOT EXISTS packets (
+      timestamp        TIMESTAMPTZ NOT NULL,
+      gateway_id       TEXT NOT NULL,
+      packet_type      TEXT NOT NULL,
+      dev_addr         TEXT,
+      join_eui         TEXT,
+      dev_eui          TEXT,
+      operator         TEXT NOT NULL DEFAULT '',
+      frequency        BIGINT NOT NULL,
+      spreading_factor SMALLINT,
+      bandwidth        INTEGER NOT NULL,
+      rssi             SMALLINT NOT NULL,
+      snr              REAL NOT NULL,
+      payload_size     INTEGER NOT NULL,
+      airtime_us       INTEGER NOT NULL,
+      f_cnt            BIGINT,
+      f_port           SMALLINT,
+      confirmed        BOOLEAN,
+      session_id       TEXT
+    )
+  `;
 
-  // Add session_id column if it doesn't exist (migration for existing tables)
-  try {
-    await client.command({
-      query: `ALTER TABLE packets ADD COLUMN IF NOT EXISTS session_id Nullable(String) DEFAULT NULL`,
-    });
-    console.log('  Added session_id column to packets table');
-  } catch {
-    // Column might already exist - ignore
-  }
+  await sql`SELECT create_hypertable('packets', 'timestamp', if_not_exists => TRUE)`;
+  await sql`SELECT add_retention_policy('packets', INTERVAL '8 days', if_not_exists => TRUE)`;
+  await sql`SELECT add_retention_policy('packets_hourly', INTERVAL '8 days', if_not_exists => TRUE)`;
+  await sql`SELECT add_retention_policy('packets_channel_sf_hourly', INTERVAL '8 days', if_not_exists => TRUE)`;
 
-  // Create gateways table
-  await client.command({
-    query: `
-      CREATE TABLE IF NOT EXISTS gateways (
-        gateway_id String,
-        name Nullable(String),
-        first_seen DateTime64(3),
-        last_seen DateTime64(3)
-      )
-      ENGINE = ReplacingMergeTree(last_seen)
-      ORDER BY gateway_id
-    `,
-  });
-  console.log('  Created gateways table');
+  await sql`
+    CREATE TABLE IF NOT EXISTS gateways (
+      gateway_id  TEXT PRIMARY KEY,
+      name        TEXT,
+      alias       TEXT,
+      group_name  TEXT,
+      first_seen  TIMESTAMPTZ NOT NULL,
+      last_seen   TIMESTAMPTZ NOT NULL,
+      latitude    DOUBLE PRECISION,
+      longitude   DOUBLE PRECISION
+    )
+  `;
 
-  // Add latitude/longitude columns to gateways if they don't exist
-  try {
-    await client.command({
-      query: `ALTER TABLE gateways ADD COLUMN IF NOT EXISTS latitude Nullable(Float64)`,
-    });
-    await client.command({
-      query: `ALTER TABLE gateways ADD COLUMN IF NOT EXISTS longitude Nullable(Float64)`,
-    });
-    console.log('  Added latitude/longitude columns to gateways table');
-  } catch {
-    // Columns might already exist - ignore
-  }
+  await sql`
+    CREATE TABLE IF NOT EXISTS custom_operators (
+      id       SERIAL PRIMARY KEY,
+      prefix   TEXT NOT NULL,
+      name     TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 0
+    )
+  `;
 
-  // Create custom_operators table
-  await client.command({
-    query: `
-      CREATE TABLE IF NOT EXISTS custom_operators (
-        id UInt32,
-        prefix String,
-        name String,
-        priority Int16 DEFAULT 0
-      )
-      ENGINE = MergeTree()
-      ORDER BY id
-    `,
-  });
-  console.log('  Created custom_operators table');
+  await sql`
+    CREATE TABLE IF NOT EXISTS hide_rules (
+      id          SERIAL PRIMARY KEY,
+      rule_type   TEXT NOT NULL,
+      prefix      TEXT NOT NULL,
+      description TEXT
+    )
+  `;
 
-  // Create hide_rules table
-  await client.command({
-    query: `
-      CREATE TABLE IF NOT EXISTS hide_rules (
-        id UInt32,
-        rule_type LowCardinality(String),
-        prefix String,
-        description Nullable(String)
-      )
-      ENGINE = MergeTree()
-      ORDER BY id
-    `,
-  });
-  console.log('  Created hide_rules table');
+  await sql`
+    CREATE MATERIALIZED VIEW IF NOT EXISTS packets_hourly
+    WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
+    SELECT
+      time_bucket('1 hour', timestamp) AS hour,
+      gateway_id,
+      operator,
+      packet_type,
+      COUNT(*) AS packet_count,
+      SUM(airtime_us) AS airtime_us_sum,
+      COUNT(DISTINCT dev_addr) AS unique_devices
+    FROM packets
+    GROUP BY hour, gateway_id, operator, packet_type
+  `;
+
+  await sql`
+    SELECT add_continuous_aggregate_policy('packets_hourly',
+      start_offset      => INTERVAL '3 days',
+      end_offset        => NULL,
+      schedule_interval => INTERVAL '2 minutes',
+      if_not_exists     => TRUE)
+  `;
+
+  await sql`
+    CREATE MATERIALIZED VIEW IF NOT EXISTS packets_channel_sf_hourly
+    WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS
+    SELECT
+      time_bucket('1 hour', timestamp) AS hour,
+      gateway_id,
+      frequency,
+      COALESCE(spreading_factor, 0) AS spreading_factor,
+      COUNT(*) AS packet_count,
+      SUM(airtime_us) AS airtime_us_sum
+    FROM packets
+    GROUP BY hour, gateway_id, frequency, spreading_factor
+  `;
+
+  await sql`
+    SELECT add_continuous_aggregate_policy('packets_channel_sf_hourly',
+      start_offset      => INTERVAL '3 days',
+      end_offset        => NULL,
+      schedule_interval => INTERVAL '2 minutes',
+      if_not_exists     => TRUE)
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS packets_gateway_ts_idx ON packets (gateway_id, timestamp DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS packets_dev_addr_ts_idx ON packets (dev_addr, timestamp DESC) WHERE dev_addr IS NOT NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS packets_packet_type_ts_idx ON packets (packet_type, timestamp DESC)`;
+
+  // Refresh continuous aggregates on startup so dashboards have data immediately
+  await sql`CALL refresh_continuous_aggregate('packets_hourly', NULL, NULL)`;
+  await sql`CALL refresh_continuous_aggregate('packets_channel_sf_hourly', NULL, NULL)`;
 
   console.log('Migrations complete');
 }

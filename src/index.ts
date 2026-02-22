@@ -1,7 +1,9 @@
+import path from 'path';
+import fs from 'fs';
 import { loadConfig } from './config.js';
-import { initClickHouse, closeClickHouse } from './db/index.js';
+import { initPostgres, closePostgres } from './db/index.js';
 import { runMigrations } from './db/migrations.js';
-import { insertPacket, upsertGateway, getCustomOperators } from './db/queries.js';
+import { insertPacket, flushPackets, upsertGateway, getCustomOperators } from './db/queries.js';
 import { connectMqtt, onPacket, onGatewayLocation, disconnectMqtt } from './mqtt/consumer.js';
 import { initOperatorPrefixes } from './operators/prefixes.js';
 import { startApi } from './api/index.js';
@@ -9,6 +11,20 @@ import { SessionTracker } from './session/tracker.js';
 import type { ParsedPacket, MyDeviceRange, OperatorMapping } from './types.js';
 
 const CONFIG_PATH = process.env.CONFIG_PATH ?? './config.toml';
+
+async function seedGatewaysFromCsv(csvPath: string): Promise<void> {
+  if (!fs.existsSync(csvPath)) return;
+  const lines = fs.readFileSync(csvPath, 'utf8').trim().split('\n');
+  for (const line of lines.slice(1)) {
+    const [id, name, alias, group, lat, lng] = line.split(',').map(s => s.trim());
+    if (!id) continue;
+    const location = (lat && lng)
+      ? { latitude: parseFloat(lat), longitude: parseFloat(lng) }
+      : null;
+    await upsertGateway(id, name || null, location, alias || null, group || null);
+  }
+  console.log(`Seeded gateways from ${csvPath}`);
+}
 
 function buildKnownDeviceRanges(operators: OperatorMapping[]): MyDeviceRange[] {
   const ranges: MyDeviceRange[] = [];
@@ -35,12 +51,16 @@ async function main(): Promise<void> {
   const config = loadConfig(CONFIG_PATH);
   console.log('Configuration loaded');
 
-  // Initialize ClickHouse
-  initClickHouse(config.clickhouse);
-  console.log(`ClickHouse client initialized: ${config.clickhouse.url}`);
+  // Initialize Postgres
+  initPostgres(config.postgres);
+  console.log(`Postgres client initialized: ${config.postgres.url}`);
 
   // Run migrations
   await runMigrations();
+
+  // Seed gateway names from gateways.csv if present
+  const csvPath = path.resolve(path.dirname(path.resolve(CONFIG_PATH)), 'gateways.csv');
+  await seedGatewaysFromCsv(csvPath);
 
   // Load custom operators from DB and config
   const dbOperators = await getCustomOperators();
@@ -106,12 +126,10 @@ async function main(): Promise<void> {
   });
 
   // Handle gateway location updates from application-level MQTT messages
-  onGatewayLocation(async (gatewayId, location) => {
-    try {
-      await upsertGateway(gatewayId, location.name ?? null, location);
-    } catch (err) {
+  onGatewayLocation((gatewayId, location) => {
+    upsertGateway(gatewayId, location.name ?? null, location).catch(err => {
       console.error('Error updating gateway location:', err);
-    }
+    });
   });
 
   // Build known device ranges from operators with known_devices = true
@@ -139,7 +157,8 @@ async function shutdown(): Promise<void> {
   try {
     sessionTrackerRef?.stopCleanup();
     await disconnectMqtt();
-    await closeClickHouse();
+    await flushPackets();
+    await closePostgres();
   } catch (err) {
     console.error('Error during shutdown:', err);
   }

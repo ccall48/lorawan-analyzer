@@ -94,27 +94,77 @@ body {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
-/* Gateway selector: collapsed = single row, clipped */
+/* Gateway selector */
 .gateway-selector {
   flex-wrap: nowrap;
 }
 
-#gateway-tabs {
-  overflow: hidden;
-  flex-wrap: nowrap;
+.gateway-tabs-scroll {
+  flex: 1;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.gateway-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+#gateway-tabs {
+  flex-wrap: nowrap;
+  display: flex;
+  gap: 4px;
+}
+
+.gateway-scroll-controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(24, 14, 10, 0.9);
+  padding-left: 4px;
+}
+
+/* Scroll buttons */
+.gateway-scroll-btn {
+  color: rgba(255, 255, 255, 0.4);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.gateway-scroll-btn:hover {
+  color: rgba(255, 255, 255, 0.9);
 }
 
 /* Expanded: wrap onto multiple lines */
 .gateway-selector.expanded {
   flex-wrap: wrap;
-  max-height: 60vh;
+}
+
+.gateway-selector.expanded .gateway-tabs-scroll {
+  width: 100%;
+  flex-wrap: wrap;
+  overflow: visible;
+  max-height: 50vh;
   overflow-y: auto;
 }
 
 .gateway-selector.expanded #gateway-tabs {
-  overflow: visible;
   flex-wrap: wrap;
+}
+
+.gateway-selector.expanded .gateway-scroll-controls {
+  background: transparent;
+  align-self: flex-start;
 }
 
 /* Expand button */
@@ -142,17 +192,17 @@ body {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.5rem;
-  padding: 1rem 1.25rem;
+  padding: 0.625rem 0.75rem;
 }
 
 .stat-card .label {
   color: rgba(255, 255, 255, 0.5);
   font-size: 0.75rem;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.125rem;
 }
 
 .stat-card .value {
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.9);
 }
@@ -162,13 +212,13 @@ body {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.5rem;
-  padding: 1rem;
+  padding: 0.75rem;
 }
 
 .chart-title {
   font-size: 0.875rem;
   font-weight: 500;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -177,13 +227,13 @@ body {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.5rem;
-  padding: 1rem;
+  padding: 0.75rem;
 }
 
 .panel-title {
   font-size: 0.875rem;
   font-weight: 500;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
   color: rgba(255, 255, 255, 0.9);
 }
 
@@ -703,6 +753,18 @@ body {
 .activity-fcnt {
   color: rgba(255, 255, 255, 0.6);
   min-width: 80px;
+}
+
+/* Group filter dropdown */
+#group-filter {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+}
+
+#group-filter option {
+  background: #1a1210;
+  color: rgba(255, 255, 255, 0.8);
 }
 
 /* Dual RSSI range slider */

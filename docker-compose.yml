@@ -1,19 +1,16 @@
 services:
-  clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    volumes:
-      - ./clickhouse/data:/var/lib/clickhouse
-      - ./clickhouse/config/allow-remote.xml:/etc/clickhouse-server/users.d/allow-remote.xml:ro
-      - ./clickhouse/config/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
-      - ./clickhouse/config/logging.xml:/etc/clickhouse-server/config.d/logging.xml:ro
+  postgres:
+    image: timescale/timescaledb:latest-pg16
     environment:
-      CLICKHOUSE_DB: lorawan
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
+      POSTGRES_DB: lorawan
+      POSTGRES_USER: lorawan
+      POSTGRES_PASSWORD: lorawan
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
     healthcheck:
-      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      test: ["CMD-SHELL", "pg_isready -U lorawan -d lorawan"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -26,9 +23,16 @@ services:
     volumes:
       - ./config.toml:/app/config.toml:ro
       - ./public:/app/public:ro
+      - ./gateways.csv:/app/gateways.csv:ro
+      - ./data:/app/data
     environment:
       CONFIG_PATH: /app/config.toml
+    networks:
+      - internal
     depends_on:
-      clickhouse:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
+
+networks:
+  internal:

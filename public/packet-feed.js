@@ -28,7 +28,6 @@
     hideTypes: [],         // type keys to hide from filter bar (e.g. ['join', 'ack'])
     noFilterBar: false,    // skip generating filter bar (page provides its own)
     countEl: null,         // external element for packet count
-    searchEl: null,        // external input element for search
     storagePrefix: '',     // prefix for localStorage keys
   };
 
@@ -232,7 +231,7 @@
     }
 
     if (isDown) {
-      const clickAttr = opts.clickable && p.dev_addr ? `onclick="window.location.href='device.html?addr=${p.dev_addr}'" style="cursor:pointer"` : '';
+      const clickAttr = opts.clickable && p.dev_addr ? `onclick="window.location.href='device.html?' + new URLSearchParams({...Object.fromEntries(new URLSearchParams(location.search)), addr: '${p.dev_addr}'}).toString()" style="cursor:pointer"` : '';
       const operatorCol = opts.showOperator ? `<span class="operator" ${operatorStyle}>${p.operator}</span>` : '';
       const addrCol = opts.showAddr ? `<span class="addr">${p.dev_addr || '?'}</span>` : '';
       return `
@@ -256,7 +255,7 @@
     }
 
     // Uplink
-    const clickAttr = opts.clickable && p.dev_addr ? `onclick="window.location.href='device.html?addr=${p.dev_addr}'" style="cursor:pointer"` : '';
+    const clickAttr = opts.clickable && p.dev_addr ? `onclick="window.location.href='device.html?' + new URLSearchParams({...Object.fromEntries(new URLSearchParams(location.search)), addr: '${p.dev_addr}'}).toString()" style="cursor:pointer"` : '';
     const operatorCol = opts.showOperator ? `<span class="operator" ${operatorStyle}>${p.operator}</span>` : '';
     const addrCol = opts.showAddr ? `<span class="addr ${isMine ? 'mine' : ''}">${p.dev_addr}</span>` : '';
     return `
@@ -356,13 +355,6 @@
     // Filter bar (or wire up external elements)
     if (opts.noFilterBar) {
       if (opts.countEl) countEl = opts.countEl;
-      if (opts.searchEl) {
-        searchInput = opts.searchEl;
-        searchInput.addEventListener('input', (e) => {
-          searchText = e.target.value.toLowerCase();
-          renderFeed();
-        });
-      }
     } else {
       const filterBar = buildFilterBar();
       filterBar.className += ' bg-white/5 border-b border-white/10 flex-shrink-0';

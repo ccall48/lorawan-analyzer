@@ -12,11 +12,11 @@
     <!-- Header -->
     <header class="bg-white/5 border-b border-white/10 px-6 py-2 flex-shrink-0">
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-6">
+        <div class="flex items-center gap-3">
           <h1 class="text-base font-bold text-white">LoRaWAN Analyzer</h1>
           <!-- Navigation -->
           <nav class="flex gap-1">
-            <a href="index.html" class="nav-link px-3 py-1 rounded text-sm">Dashboard</a>
+            <a href="./" class="nav-link px-3 py-1 rounded text-sm">Dashboard</a>
             <a href="live.html" class="nav-link active px-3 py-1 rounded text-sm">Live Stream</a>
           </nav>
           <div class="border-l border-white/20 h-4"></div>
@@ -24,7 +24,10 @@
             <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
             <span id="packet-count">0</span> packets
           </div>
-          <input type="text" id="search-input" placeholder="Search..." class="bg-white/10 border border-white/20 rounded px-2 py-1 text-xs text-white placeholder-white/40 w-32 focus:outline-none focus:border-white/40">
+          <input type="text" id="search-input" placeholder="Search..." class="bg-white/10 border border-white/20 rounded px-2 py-1 text-xs text-white placeholder-white/40 w-28 focus:outline-none focus:border-white/40">
+          <select id="group-filter" class="bg-white/10 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-white/40 max-w-24">
+            <option value="">All Groups</option>
+          </select>
           <div class="flex items-center gap-1 text-xs text-white/60">
             <span>RSSI</span>
             <div class="rssi-range-wrap">
@@ -34,7 +37,7 @@
             <span id="rssi-range-label" class="text-white/80 whitespace-nowrap" style="min-width:60px">off</span>
           </div>
         </div>
-        <div class="flex items-center gap-4">
+        <div class="flex items-center gap-3">
           <!-- Packet Type Filter -->
           <div class="flex items-center gap-1">
             <button id="toggle-up" class="toggle-btn active px-2 py-1 rounded text-xs" title="Uplinks">UP</button>
@@ -47,6 +50,7 @@
           <div class="flex items-center gap-2">
             <button id="toggle-owned" class="toggle-btn active px-2 py-1 rounded text-xs">My Devices</button>
             <button id="toggle-foreign" class="toggle-btn active px-2 py-1 rounded text-xs">Unknown</button>
+            <button id="reset-filters" class="toggle-btn px-2 py-1 rounded text-xs text-white/40 -mr-2" title="Reset all filters">Reset</button>
           </div>
         </div>
       </div>
@@ -55,11 +59,21 @@
     <!-- Gateway Filter -->
     <div class="bg-white/5 border-b border-white/10 px-6 flex-shrink-0">
       <div class="gateway-selector flex items-center gap-1 py-1">
-        <button class="gateway-tab active px-3 py-1 rounded text-xs" data-gateway="">All Gateways</button>
-        <div id="gateway-tabs" class="flex gap-1"></div>
-        <button id="gateway-expand-btn" class="gateway-expand-btn px-2 py-1 ml-auto" title="Show all gateways">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-        </button>
+        <div class="gateway-tabs-scroll flex gap-1 items-center">
+          <button class="gateway-tab active px-3 py-1 rounded text-xs" data-gateway="">All Gateways</button>
+          <div id="gateway-tabs" class="flex gap-1"></div>
+        </div>
+        <div class="gateway-scroll-controls flex items-center gap-0.5 -mr-6">
+          <button id="gateway-scroll-left" class="gateway-scroll-btn px-1.5 py-1" title="Scroll left">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+          </button>
+          <button id="gateway-scroll-right" class="gateway-scroll-btn px-1.5 py-1" title="Scroll right">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </button>
+          <button id="gateway-expand-btn" class="gateway-expand-btn px-2 py-1" title="Show all gateways">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+        </div>
       </div>
     </div>
 

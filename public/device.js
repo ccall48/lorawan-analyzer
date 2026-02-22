@@ -4,7 +4,7 @@ const params = new URLSearchParams(window.location.search);
 const devAddr = params.get('addr');
 const gatewayId = params.get('gateway') || null;
 
-let selectedHours = parseInt(params.get('hours'), 10) || parseInt(localStorage.getItem('lorawanSelectedHours'), 10) || 24;
+let selectedHours = parseInt(params.get('hours'), 10) || 24;
 let filter = { prefixes: [] };
 let operatorColors = {};
 
@@ -49,19 +49,35 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   loadDeviceData();
 
+  // Wire nav + back links to carry shared URL params back to other pages
+  updateNavLinks();
+
   // Time range buttons - sync active state with selectedHours
   document.querySelectorAll('.time-btn').forEach(btn => {
     const hours = parseInt(btn.dataset.hours, 10);
     btn.classList.toggle('active', hours === selectedHours);
     btn.addEventListener('click', () => {
       selectedHours = hours;
-      localStorage.setItem('lorawanSelectedHours', selectedHours.toString());
       document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      updateNavLinks();
       loadDeviceData();
     });
   });
 });
+
+function updateNavLinks() {
+  // Start from all params we arrived with, override hours, drop device-specific ones
+  const p = new URLSearchParams(params);
+  p.delete('addr');
+  p.delete('gateway');
+  if (selectedHours !== 24) p.set('hours', selectedHours); else p.delete('hours');
+  const qs = p.toString();
+  document.querySelectorAll('nav a, a[href="./"]').forEach(a => {
+    const base = a.href.split('?')[0];
+    a.href = qs ? `${base}?${qs}` : base;
+  });
+}
 
 // API Helper
 async function api(path) {

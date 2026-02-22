@@ -30,8 +30,7 @@ export async function operatorRoutes(fastify: FastifyInstance): Promise<void> {
     const id = await addCustomOperator(prefix, name, priority ?? 0);
 
     // Reload operator prefixes
-    const operators = await getCustomOperators();
-    initOperatorPrefixes(operators);
+    initOperatorPrefixes(await getCustomOperators());
 
     return { id };
   });
@@ -42,8 +41,7 @@ export async function operatorRoutes(fastify: FastifyInstance): Promise<void> {
     await deleteCustomOperator(id);
 
     // Reload operator prefixes
-    const operators = await getCustomOperators();
-    initOperatorPrefixes(operators);
+    initOperatorPrefixes(await getCustomOperators());
 
     return { success: true };
   });

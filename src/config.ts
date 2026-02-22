@@ -10,9 +10,8 @@ const DEFAULT_CONFIG: Config = {
     topic: '#',
     format: 'protobuf',
   },
-  clickhouse: {
-    url: 'http://clickhouse:8123',
-    database: 'lorawan',
+  postgres: {
+    url: 'postgres://lorawan:lorawan@postgres:5432/lorawan',
   },
   api: {
     bind: '0.0.0.0:3000',
@@ -32,7 +31,7 @@ export function loadConfig(configPath: string): Config {
 
   return {
     mqtt: { ...DEFAULT_CONFIG.mqtt, ...parsed.mqtt },
-    clickhouse: { ...DEFAULT_CONFIG.clickhouse, ...parsed.clickhouse },
+    postgres: { ...DEFAULT_CONFIG.postgres, ...parsed.postgres },
     api: { ...DEFAULT_CONFIG.api, ...parsed.api },
     operators: parsed.operators ?? [],
     hide_rules: parsed.hide_rules ?? [],

@@ -9,15 +9,29 @@ interface DevicePrefix {
 
 interface LiveClient {
   ws: WebSocket;
-  gatewayId: string | null;  // null = all gateways
-  packetTypes: Set<string> | null;  // null = all types
+  gatewayId: string | null;        // null = all gateways
+  gatewayIds: Set<string> | null;  // null = no restriction; used for group filtering
+  packetTypes: Set<string> | null; // null = all types
   rssiMin: number | null;
   rssiMax: number | null;
-  filterMode: string | null;  // 'owned' | 'foreign' | null (all)
+  filterMode: string | null;       // 'owned' | 'foreign' | null (all)
   prefixes: DevicePrefix[];
+  search: string | null;           // lowercase search string, null = no filter
 }
 
 const clients: Set<LiveClient> = new Set();
+
+// In-memory cache of gateway metadata for live broadcast (populated by upsertGateway)
+const gatewayNameCache = new Map<string, { name: string | null; alias: string | null; group_name: string | null }>();
+
+export function updateGatewayCache(
+  gatewayId: string,
+  name: string | null,
+  alias: string | null,
+  group_name: string | null
+): void {
+  gatewayNameCache.set(gatewayId, { name, alias, group_name });
+}
 
 export function addLiveClient(
   ws: WebSocket,
@@ -27,15 +41,19 @@ export function addLiveClient(
   rssiMax: number | null = null,
   filterMode: string | null = null,
   prefixes: DevicePrefix[] = [],
+  search: string | null = null,
+  gatewayIds: string[] | null = null,
 ): void {
   const client: LiveClient = {
     ws,
     gatewayId,
+    gatewayIds: gatewayIds && gatewayIds.length > 0 ? new Set(gatewayIds) : null,
     packetTypes: packetTypes ? new Set(packetTypes) : null,
     rssiMin,
     rssiMax,
     filterMode,
     prefixes,
+    search: search ? search.toLowerCase() : null,
   };
   clients.add(client);
 
@@ -63,12 +81,18 @@ function matchesDeviceFilter(devAddr: string | null, filterMode: string | null, 
 }
 
 export function broadcastPacket(packet: ParsedPacket): void {
-  const livePacket = convertToLivePacket(packet);
+  const gwRow = gatewayNameCache.get(packet.gateway_id);
+
+  const livePacket = convertToLivePacket(packet, gwRow);
   const message = JSON.stringify(livePacket);
 
   for (const client of clients) {
     // Filter by gateway if specified
     if (client.gatewayId && client.gatewayId !== packet.gateway_id) {
+      continue;
+    }
+    // Filter by gateway set (group filter)
+    if (client.gatewayIds && !client.gatewayIds.has(packet.gateway_id)) {
       continue;
     }
 
@@ -90,6 +114,21 @@ export function broadcastPacket(packet: ParsedPacket): void {
       }
     }
 
+    // Search filter — check all text fields including gateway metadata
+    if (client.search) {
+      const haystack = [
+        packet.gateway_id,
+        gwRow?.name,
+        gwRow?.alias,
+        gwRow?.group_name,
+        packet.operator,
+        packet.dev_addr,
+        packet.dev_eui,
+        packet.join_eui,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(client.search)) continue;
+    }
+
     try {
       if (client.ws.readyState === 1) {  // OPEN
         client.ws.send(message);
@@ -101,7 +140,7 @@ export function broadcastPacket(packet: ParsedPacket): void {
   }
 }
 
-function convertToLivePacket(packet: ParsedPacket): LivePacket {
+function convertToLivePacket(packet: ParsedPacket, gwRow?: { name: string | null; alias?: string | null; group_name?: string | null }): LivePacket {
   const dataRate = packet.spreading_factor && packet.bandwidth
     ? `SF${packet.spreading_factor}BW${packet.bandwidth / 1000}`
     : 'Unknown';
@@ -109,6 +148,7 @@ function convertToLivePacket(packet: ParsedPacket): LivePacket {
   const base: LivePacket = {
     timestamp: packet.timestamp.getTime(),
     gateway_id: packet.gateway_id,
+    gateway_name: gwRow?.name ?? undefined,
     type: packet.packet_type,
     operator: packet.operator,
     data_rate: dataRate,

@@ -4,6 +4,7 @@ const BASE_PATH = window.location.pathname.replace(/\/[^/]*$/, '');
 // State
 let selectedGateway = null;
 let selectedHours = 24;
+let selectedGroup = null;
 let gateways = [];
 let filter = { showOwned: true, showForeign: true, prefixes: [] };
 let operatorColors = {};
@@ -11,54 +12,54 @@ let deviceSearchText = '';
 let rssiFilterMin = -200;
 let rssiFilterMax = 0;
 
-// Load filter state from localStorage
-function loadFilterState() {
-  try {
-    const saved = localStorage.getItem('lorawanFilterState');
-    if (saved) {
-      const state = JSON.parse(saved);
-      filter.showOwned = state.showOwned ?? true;
-      filter.showForeign = state.showForeign ?? true;
-    }
-    const savedGateway = localStorage.getItem('lorawanSelectedGateway');
-    if (savedGateway) {
-      selectedGateway = savedGateway === 'null' ? null : savedGateway;
-    }
-    const savedHours = localStorage.getItem('lorawanSelectedHours');
-    if (savedHours) {
-      selectedHours = parseInt(savedHours, 10) || 24;
-    }
-  } catch (e) {
-    console.error('Failed to load filter state:', e);
-  }
+// --- URL state ---
+function readUrlState() {
+  const p = new URLSearchParams(location.search);
+  selectedGateway = p.get('gw') || null;
+  selectedHours   = parseInt(p.get('hours') || '24', 10) || 24;
+  selectedGroup   = p.get('group') || null;
+  filter.showOwned   = p.get('owned')   !== '0';
+  filter.showForeign = p.get('foreign') !== '0';
+  return {
+    rssiMin:      p.get('rssi_min'),
+    rssiMax:      p.get('rssi_max'),
+    deviceSearch: p.get('device_search') || '',
+  };
 }
 
-function saveSelectedHours() {
-  try {
-    localStorage.setItem('lorawanSelectedHours', selectedHours.toString());
-  } catch (e) {
-    console.error('Failed to save hours:', e);
-  }
+function buildParams() {
+  // Start from all current URL params, then apply this page's state
+  const p = new URLSearchParams(location.search);
+  if (selectedGateway) p.set('gw', selectedGateway); else p.delete('gw');
+  if (selectedHours !== 24) p.set('hours', selectedHours); else p.delete('hours');
+  if (!filter.showOwned)   p.set('owned',   '0'); else p.delete('owned');
+  if (!filter.showForeign) p.set('foreign', '0'); else p.delete('foreign');
+  const rssiLo = parseInt(document.getElementById('rssi-min')?.value, 10);
+  const rssiHi = parseInt(document.getElementById('rssi-max')?.value, 10);
+  if (rssiLo > -140) p.set('rssi_min', rssiLo); else p.delete('rssi_min');
+  if (rssiHi < -30)  p.set('rssi_max', rssiHi); else p.delete('rssi_max');
+  const searchVal = document.getElementById('search-input')?.value?.trim();
+  if (searchVal) p.set('search', searchVal); else p.delete('search');
+  if (selectedGroup) p.set('group', selectedGroup); else p.delete('group');
+  const deviceSearchVal = document.getElementById('device-search')?.value?.trim();
+  if (deviceSearchVal) p.set('device_search', deviceSearchVal); else p.delete('device_search');
+  return p;
 }
 
-// Save filter state to localStorage
-function saveFilterState() {
-  try {
-    localStorage.setItem('lorawanFilterState', JSON.stringify({
-      showOwned: filter.showOwned,
-      showForeign: filter.showForeign
-    }));
-  } catch (e) {
-    console.error('Failed to save filter state:', e);
-  }
+function pushUrlState() {
+  const p = buildParams();
+  const qs = p.toString();
+  history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
+  updateNavLinks();
 }
 
-function saveSelectedGateway() {
-  try {
-    localStorage.setItem('lorawanSelectedGateway', selectedGateway === null ? 'null' : selectedGateway);
-  } catch (e) {
-    console.error('Failed to save gateway:', e);
-  }
+function updateNavLinks() {
+  const p = buildParams();
+  const qs = p.toString();
+  document.querySelectorAll('nav a').forEach(a => {
+    const base = a.href.split('?')[0];
+    a.href = qs ? `${base}?${qs}` : base;
+  });
 }
 
 // Charts
@@ -69,13 +70,13 @@ let sfChart = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-  loadFilterState();
+  const { rssiMin: initRssiMin, rssiMax: initRssiMax, deviceSearch: initDeviceSearch } = readUrlState();
 
-  // Apply saved filter state to UI before loading data
+  // Apply URL state to UI before loading data
   document.getElementById('toggle-owned').classList.toggle('active', filter.showOwned);
   document.getElementById('toggle-foreign').classList.toggle('active', filter.showForeign);
 
-  // Apply saved time range to UI
+  // Apply time range to UI
   document.querySelectorAll('.time-btn').forEach(btn => {
     const hours = parseInt(btn.dataset.hours, 10);
     btn.classList.toggle('active', hours === selectedHours);
@@ -83,7 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await Promise.all([loadMyDevicesConfig(), loadOperatorColors()]);
   initGatewayMap();
-  loadGateways();
+  await loadGateways();
   loadAllData();
   initCharts();
 
@@ -91,9 +92,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.querySelectorAll('.time-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       selectedHours = parseInt(btn.dataset.hours, 10);
-      saveSelectedHours();
       document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      pushUrlState();
       loadAllData();
     });
   });
@@ -102,20 +103,32 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('toggle-owned').addEventListener('click', (e) => {
     filter.showOwned = !filter.showOwned;
     e.target.classList.toggle('active', filter.showOwned);
-    saveFilterState();
+    pushUrlState();
     loadAllData();
   });
 
   document.getElementById('toggle-foreign').addEventListener('click', (e) => {
     filter.showForeign = !filter.showForeign;
     e.target.classList.toggle('active', filter.showForeign);
-    saveFilterState();
+    pushUrlState();
     loadAllData();
   });
 
-  // Device search
-  document.getElementById('device-search').addEventListener('input', (e) => {
+  // Header search (gateway group filtering + cross-page search param)
+  const headerSearchEl = document.getElementById('search-input');
+  const initHeaderSearch = new URLSearchParams(location.search).get('search') || '';
+  if (initHeaderSearch) headerSearchEl.value = initHeaderSearch;
+  headerSearchEl.addEventListener('input', () => {
+    renderGatewayTabs();
+    pushUrlState();
+  });
+
+  // Device list search
+  const deviceSearchEl = document.getElementById('device-search');
+  if (initDeviceSearch) { deviceSearchEl.value = initDeviceSearch; deviceSearchText = initDeviceSearch.toLowerCase(); }
+  deviceSearchEl.addEventListener('input', (e) => {
     deviceSearchText = e.target.value.toLowerCase();
+    pushUrlState();
     loadDeviceBreakdown();
   });
 
@@ -124,17 +137,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const rssiMaxEl = document.getElementById('rssi-max');
   const rssiRangeLabel = document.getElementById('rssi-range-label');
 
-  // Restore saved RSSI filter
-  try {
-    const saved = localStorage.getItem('lorawanRssiFilter');
-    if (saved) {
-      const { min, max } = JSON.parse(saved);
-      rssiMinEl.value = min;
-      rssiMaxEl.value = max;
-      rssiFilterMin = min;
-      rssiFilterMax = max;
-    }
-  } catch (e) {}
+  if (initRssiMin) { rssiMinEl.value = initRssiMin; rssiFilterMin = parseInt(initRssiMin, 10); }
+  if (initRssiMax) { rssiMaxEl.value = initRssiMax; rssiFilterMax = parseInt(initRssiMax, 10); }
 
   function updateRssiLabel() {
     const lo = parseInt(rssiMinEl.value, 10);
@@ -150,15 +154,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  function saveRssiFilter() {
-    try {
-      localStorage.setItem('lorawanRssiFilter', JSON.stringify({
-        min: parseInt(rssiMinEl.value, 10),
-        max: parseInt(rssiMaxEl.value, 10)
-      }));
-    } catch (e) {}
-  }
-
   updateRssiLabel();
 
   rssiMinEl.addEventListener('input', () => {
@@ -167,7 +162,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     rssiFilterMin = parseInt(rssiMinEl.value, 10);
     updateRssiLabel();
-    saveRssiFilter();
   });
   rssiMaxEl.addEventListener('input', () => {
     if (parseInt(rssiMaxEl.value, 10) < parseInt(rssiMinEl.value, 10)) {
@@ -175,29 +169,44 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     rssiFilterMax = parseInt(rssiMaxEl.value, 10);
     updateRssiLabel();
-    saveRssiFilter();
   });
-  rssiMinEl.addEventListener('change', () => loadDeviceBreakdown());
-  rssiMaxEl.addEventListener('change', () => loadDeviceBreakdown());
+  rssiMinEl.addEventListener('change', () => { pushUrlState(); loadDeviceBreakdown(); });
+  rssiMaxEl.addEventListener('change', () => { pushUrlState(); loadDeviceBreakdown(); });
 
-  // Gateway tab: All Gateways
-  document.querySelector('.gateway-tab[data-gateway=""]').addEventListener('click', () => {
+  initGatewayTabs(gwId => selectGateway(gwId), group => {
+    selectedGroup = group;
+    pushUrlState();
+    renderGatewayTabs();
+  });
+
+  // Reset all filters
+  document.getElementById('reset-filters').addEventListener('click', () => {
+    selectedGateway = null;
+    selectedHours = 24;
+    filter.showOwned = true;
+    filter.showForeign = true;
+    deviceSearchText = '';
+    selectedGroup = null;
+    document.getElementById('device-search').value = '';
+    document.getElementById('search-input').value = '';
+    document.getElementById('group-filter').value = '';
+    document.getElementById('rssi-min').value = -140;
+    document.getElementById('rssi-max').value = -30;
+    rssiFilterMin = -200;
+    rssiFilterMax = 0;
+    updateRssiLabel();
+    document.getElementById('toggle-owned').classList.add('active');
+    document.getElementById('toggle-foreign').classList.add('active');
+    document.querySelectorAll('.time-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.hours, 10) === 24));
     selectGateway(null);
-    collapseGatewaySelector();
-  });
-
-  // Gateway expand/collapse
-  document.getElementById('gateway-expand-btn').addEventListener('click', toggleGatewayExpand);
-  document.addEventListener('click', (e) => {
-    const selector = document.querySelector('.gateway-selector');
-    const btn = document.getElementById('gateway-expand-btn');
-    if (selector.classList.contains('expanded') && !selector.contains(e.target) && !btn.contains(e.target)) {
-      collapseGatewaySelector();
-    }
+    pushUrlState();
+    loadAllData();
   });
 
   // Auto-refresh every 30 seconds
   setInterval(loadAllData, 30000);
+
+  updateNavLinks();
 });
 
 // API Helper
@@ -275,72 +284,20 @@ async function loadGateways() {
 }
 
 function renderGatewayTabs() {
-  const container = document.getElementById('gateway-tabs');
-  container.innerHTML = gateways.map(gw => {
-    const label = gw.name || gw.gateway_id;
-    const title = gw.name ? `${gw.name} (${gw.gateway_id})` : gw.gateway_id;
-    return `
-    <button class="gateway-tab px-3 py-1 rounded text-xs" data-gateway="${gw.gateway_id}" title="${title}">
-      ${label}
-      <span class="text-gray-500 ml-1">${formatNumber(gw.packet_count)}</span>
-    </button>
-  `;
-  }).join('');
-
-  container.querySelectorAll('.gateway-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      selectGateway(tab.dataset.gateway);
-      collapseGatewaySelector();
-    });
-  });
-
-  applyGatewayActiveState();
-  updateExpandBtnVisibility();
-}
-
-function applyGatewayActiveState() {
-  if (selectedGateway && gateways.some(gw => gw.gateway_id === selectedGateway)) {
-    document.querySelectorAll('.gateway-tab').forEach(tab => {
-      const isActive = (tab.dataset.gateway || null) === selectedGateway;
-      tab.classList.toggle('active', isActive);
-    });
-  } else {
-    selectedGateway = null;
-    document.querySelectorAll('.gateway-tab').forEach(tab => {
-      tab.classList.toggle('active', tab.dataset.gateway === '');
-    });
-  }
-}
-
-function updateExpandBtnVisibility() {
-  const btn = document.getElementById('gateway-expand-btn');
-  btn.style.display = gateways.length > 0 ? '' : 'none';
-}
-
-function toggleGatewayExpand() {
-  const selector = document.querySelector('.gateway-selector');
-  const btn = document.getElementById('gateway-expand-btn');
-  selector.classList.toggle('expanded');
-  btn.classList.toggle('expanded');
-}
-
-function collapseGatewaySelector() {
-  document.querySelector('.gateway-selector').classList.remove('expanded');
-  document.getElementById('gateway-expand-btn').classList.remove('expanded');
+  buildGatewayTabs(gateways, selectedGateway, 'search-input', selectedGroup);
 }
 
 function updateGatewayInfoPanel() {
   const panel = document.getElementById('gateway-info-panel');
-  const nameEl = document.getElementById('gateway-info-name');
-  const idEl = document.getElementById('gateway-info-id');
-
-  if (!panel || !nameEl || !idEl) return;
+  if (!panel) return;
 
   if (selectedGateway) {
     const gw = gateways.find(g => g.gateway_id === selectedGateway);
     if (gw) {
-      nameEl.textContent = gw.name || 'Unnamed';
-      idEl.textContent = gw.gateway_id;
+      document.getElementById('gateway-info-name').textContent = gw.name || 'Unnamed';
+      document.getElementById('gateway-info-alias').textContent = gw.alias || '—';
+      document.getElementById('gateway-info-group').textContent = gw.group_name || '—';
+      document.getElementById('gateway-info-id').textContent = gw.gateway_id;
       panel.classList.remove('hidden');
       return;
     }
@@ -350,8 +307,8 @@ function updateGatewayInfoPanel() {
 
 function selectGateway(gatewayId) {
   selectedGateway = gatewayId;
-  saveSelectedGateway();
-  applyGatewayActiveState();
+  pushUrlState();
+  renderGatewayTabs();
   updateGatewayInfoPanel();
 
   // Update map based on selection
@@ -527,16 +484,17 @@ async function loadTrafficChart() {
   }
 
   const allTimestamps = [...new Set(points.map(p => p.timestamp))].sort();
-  const colors = ['#22c55e', '#3b82f6', '#a855f7', '#f97316', '#eab308', '#ef4444', '#14b8a6'];
 
-  const datasets = Object.entries(groups).map(([name, pts], i) => {
+  const datasets = Object.entries(groups).map(([name, pts]) => {
     const pointMap = new Map(pts.map(p => [p.timestamp, p.value]));
+    const color = getOperatorColor(name);
+    const bgColor = color.startsWith('rgba') ? color.replace(/[\d.]+\)$/, '0.15)') : color + '33';
     return {
       label: name,
       data: allTimestamps.map(t => pointMap.get(t) || 0),
-      borderColor: colors[i % colors.length],
-      backgroundColor: colors[i % colors.length] + '33',
-      fill: true,
+      borderColor: color,
+      backgroundColor: color,
+      fill: false,
       tension: 0.3
     };
   });
@@ -574,41 +532,25 @@ async function loadOperatorChart() {
 }
 
 async function loadChannelChart() {
-  if (!selectedGateway) {
-    channelChart.data.labels = [];
-    channelChart.data.datasets = [];
-    channelChart.update('none');
-    return;
-  }
-
   const filterParams = getFilterParams();
   const params = new URLSearchParams({ hours: selectedHours, ...filterParams });
-  const data = await api(`/api/spectrum/${selectedGateway}/channels?${params}`);
-  const channels = data.channels || [];
+  const data = await api(`/api/spectrum/${selectedGateway || 'all'}/channels?${params}`);
+  const channels = (data.channels || []).filter(c => c.packet_count > 0 && c.frequency > 0);
 
   channelChart.data.labels = channels.map(c => (c.frequency / 1000000).toFixed(1));
   channelChart.data.datasets = [{
     label: 'Packets',
     data: channels.map(c => c.packet_count),
-    backgroundColor: channels.map(c =>
-      c.usage_percent > 30 ? '#ef4444' : c.usage_percent > 15 ? '#eab308' : '#22c55e'
-    ),
+    backgroundColor: '#3b82f6',
     borderRadius: 4
   }];
   channelChart.update('none');
 }
 
 async function loadSFChart() {
-  if (!selectedGateway) {
-    sfChart.data.labels = [];
-    sfChart.data.datasets = [];
-    sfChart.update('none');
-    return;
-  }
-
   const filterParams = getFilterParams();
   const params = new URLSearchParams({ hours: selectedHours, ...filterParams });
-  const data = await api(`/api/spectrum/${selectedGateway}/spreading-factors?${params}`);
+  const data = await api(`/api/spectrum/${selectedGateway || 'all'}/spreading-factors?${params}`);
   const sfs = data.spreadingFactors || [];
 
   sfChart.data.labels = sfs.map(s => `SF${s.spreading_factor}`);
@@ -683,7 +625,7 @@ async function loadDeviceBreakdown() {
         const intervalDisplay = d.avg_interval_s > 0 ? formatInterval(d.avg_interval_s) : '—';
         const lossDisplay = d.loss_percent > 0 ? `${d.loss_percent.toFixed(1)}%` : '0%';
         return `
-          <div class="device-detail-item ${isOwned ? 'mine' : ''}" onclick="window.location.href='device.html?addr=${d.dev_addr}'">
+          <div class="device-detail-item ${isOwned ? 'mine' : ''}" onclick="window.location.href='device.html?' + new URLSearchParams({...Object.fromEntries(new URLSearchParams(location.search)), addr: '${d.dev_addr}'}).toString()">
             <div class="device-detail-main">
               <span class="device-addr ${isOwned ? 'text-blue-400' : ''}">${d.dev_addr}</span>
               <span class="device-operator" style="color: ${opColor}">${d.operator || '?'}</span>
@@ -840,7 +782,7 @@ async function loadRecentJoins() {
 
     container.innerHTML = joins.map(j => `
       <div class="join-item">
-        <span class="eui">${j.dev_eui.slice(0, 12)}...</span>
+        <span class="eui">${j.dev_eui}</span>
         <span class="stats">${formatTime(j.timestamp)}</span>
       </div>
     `).join('');

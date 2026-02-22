@@ -11,6 +11,8 @@ function parseUTCTimestamp(ts) {
 
 // State
 let selectedGateway = null;
+let selectedHours = 24;  // passed through from dashboard, not used by live
+let selectedGroup = null;
 let liveEntries = [];
 let ws = null;
 let gateways = [];
@@ -18,60 +20,75 @@ let filter = { showOwned: true, showForeign: true, prefixes: [] };
 let typeFilter = { up: true, join: true, down: true, ack: true };
 let operatorColors = {};
 
-// Load filter state from localStorage
-function loadFilterState() {
-  try {
-    const saved = localStorage.getItem('lorawanFilterState');
-    if (saved) {
-      const state = JSON.parse(saved);
-      filter.showOwned = state.showOwned ?? true;
-      filter.showForeign = state.showForeign ?? true;
-    }
-    const savedTypes = localStorage.getItem('lorawanTypeFilter');
-    if (savedTypes) {
-      const types = JSON.parse(savedTypes);
-      typeFilter.up = types.up ?? true;
-      typeFilter.join = types.join ?? true;
-      typeFilter.down = types.down ?? true;
-      typeFilter.ack = types.ack ?? true;
-    }
-    const savedGateway = localStorage.getItem('lorawanSelectedGateway');
-    if (savedGateway) {
-      selectedGateway = savedGateway === 'null' ? null : savedGateway;
-    }
-  } catch (e) {
-    console.error('Failed to load filter state:', e);
-  }
+// Resolve selectedGroup to a list of gateway IDs (null = no filter)
+function resolveGroupToGatewayIds(group) {
+  if (!group) return null;
+  if (group === '__none__') return gateways.filter(gw => !gw.group_name || gw.group_name.trim() === '').map(gw => gw.gateway_id);
+  return gateways.filter(gw => gw.group_name === group).map(gw => gw.gateway_id);
 }
 
-// Save filter state to localStorage
-function saveFilterState() {
-  try {
-    localStorage.setItem('lorawanFilterState', JSON.stringify({
-      showOwned: filter.showOwned,
-      showForeign: filter.showForeign
-    }));
-    localStorage.setItem('lorawanTypeFilter', JSON.stringify(typeFilter));
-  } catch (e) {
-    console.error('Failed to save filter state:', e);
-  }
+// --- URL state ---
+function readUrlState() {
+  const p = new URLSearchParams(location.search);
+  selectedGateway = p.get('gw') || null;
+  selectedHours   = parseInt(p.get('hours') || '24', 10) || 24;
+  selectedGroup   = p.get('group') || null;
+  typeFilter.up   = p.get('up')   !== '0';
+  typeFilter.join = p.get('join') !== '0';
+  typeFilter.down = p.get('down') !== '0';
+  typeFilter.ack  = p.get('ack')  !== '0';
+  filter.showOwned   = p.get('owned')   !== '0';
+  filter.showForeign = p.get('foreign') !== '0';
+  const search = p.get('search') || '';
+  const rssiMin = p.get('rssi_min');
+  const rssiMax = p.get('rssi_max');
+  return { search, rssiMin, rssiMax };
 }
 
-function saveSelectedGateway() {
-  try {
-    localStorage.setItem('lorawanSelectedGateway', selectedGateway === null ? 'null' : selectedGateway);
-  } catch (e) {
-    console.error('Failed to save gateway:', e);
-  }
+function buildParams() {
+  const p = new URLSearchParams(location.search);
+  if (selectedGateway) p.set('gw', selectedGateway); else p.delete('gw');
+  if (selectedHours !== 24) p.set('hours', selectedHours); else p.delete('hours');
+  if (!typeFilter.up)   p.set('up',   '0'); else p.delete('up');
+  if (!typeFilter.join) p.set('join', '0'); else p.delete('join');
+  if (!typeFilter.down) p.set('down', '0'); else p.delete('down');
+  if (!typeFilter.ack)  p.set('ack',  '0'); else p.delete('ack');
+  if (!filter.showOwned)   p.set('owned',   '0'); else p.delete('owned');
+  if (!filter.showForeign) p.set('foreign', '0'); else p.delete('foreign');
+  const searchVal = document.getElementById('search-input')?.value?.trim();
+  if (searchVal) p.set('search', searchVal); else p.delete('search');
+  if (selectedGroup) p.set('group', selectedGroup); else p.delete('group');
+  const rssiLo = parseInt(document.getElementById('rssi-min')?.value, 10);
+  const rssiHi = parseInt(document.getElementById('rssi-max')?.value, 10);
+  if (rssiLo > -140) p.set('rssi_min', rssiLo); else p.delete('rssi_min');
+  if (rssiHi < -30)  p.set('rssi_max', rssiHi); else p.delete('rssi_max');
+  return p;
+}
+
+function pushUrlState() {
+  const p = buildParams();
+  const qs = p.toString();
+  history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
+  updateNavLinks();
+}
+
+// Keep all URL params in sync on nav links so cross-page navigation preserves state
+function updateNavLinks() {
+  const p = buildParams();
+  const qs = p.toString();
+  document.querySelectorAll('nav a').forEach(a => {
+    const base = a.href.split('?')[0];
+    a.href = qs ? `${base}?${qs}` : base;
+  });
 }
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-  loadFilterState();
+  const { search: initSearch, rssiMin: initRssiMin, rssiMax: initRssiMax } = readUrlState();
 
   await Promise.all([loadMyDevicesConfig(), loadOperatorColors()]);
 
-  // Apply saved filter state to UI
+  // Apply URL state to UI
   document.getElementById('toggle-owned').classList.toggle('active', filter.showOwned);
   document.getElementById('toggle-foreign').classList.toggle('active', filter.showForeign);
   document.getElementById('toggle-up').classList.toggle('active', typeFilter.up);
@@ -79,20 +96,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('toggle-down').classList.toggle('active', typeFilter.down);
   document.getElementById('toggle-ack').classList.toggle('active', typeFilter.ack);
 
+  const searchEl = document.getElementById('search-input');
+  if (initSearch) searchEl.value = initSearch;
+
   // RSSI range slider
   const rssiMinEl = document.getElementById('rssi-min');
   const rssiMaxEl = document.getElementById('rssi-max');
   const rssiRangeLabel = document.getElementById('rssi-range-label');
 
-  // Restore saved RSSI filter
-  try {
-    const saved = localStorage.getItem('lorawanRssiFilter');
-    if (saved) {
-      const { min, max } = JSON.parse(saved);
-      rssiMinEl.value = min;
-      rssiMaxEl.value = max;
-    }
-  } catch (e) {}
+  if (initRssiMin) rssiMinEl.value = initRssiMin;
+  if (initRssiMax) rssiMaxEl.value = initRssiMax;
 
   function updateRssiLabel() {
     const lo = parseInt(rssiMinEl.value, 10);
@@ -108,15 +121,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  function saveRssiFilter() {
-    try {
-      localStorage.setItem('lorawanRssiFilter', JSON.stringify({
-        min: parseInt(rssiMinEl.value, 10),
-        max: parseInt(rssiMaxEl.value, 10)
-      }));
-    } catch (e) {}
-  }
-
   updateRssiLabel();
 
   rssiMinEl.addEventListener('input', () => {
@@ -124,17 +128,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       rssiMinEl.value = rssiMaxEl.value;
     }
     updateRssiLabel();
-    saveRssiFilter();
   });
   rssiMaxEl.addEventListener('input', () => {
     if (parseInt(rssiMaxEl.value, 10) < parseInt(rssiMinEl.value, 10)) {
       rssiMaxEl.value = rssiMinEl.value;
     }
     updateRssiLabel();
-    saveRssiFilter();
   });
-  rssiMinEl.addEventListener('change', () => reloadWithNewFilter());
-  rssiMaxEl.addEventListener('change', () => reloadWithNewFilter());
+  rssiMinEl.addEventListener('change', () => { pushUrlState(); reloadWithNewFilter(); });
+  rssiMaxEl.addEventListener('change', () => { pushUrlState(); reloadWithNewFilter(); });
 
   // Init shared packet feed — filter bar is in the page header
   initPacketFeed('live-feed-container', {
@@ -144,7 +146,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     clickable: true,
     noFilterBar: true,
     countEl: document.getElementById('packet-count'),
-    searchEl: document.getElementById('search-input'),
     isMyDevice,
     getOperatorStyle,
   });
@@ -152,7 +153,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Flush buffered packets when user scrolls back to top
   onPacketFeedResume(flushPendingEntries);
 
-  loadGateways();
+  await loadGateways();
   loadRecentPackets(selectedGateway);
   connectWebSocket(selectedGateway);
 
@@ -161,7 +162,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById(`toggle-${key}`).addEventListener('click', (e) => {
       typeFilter[key] = !typeFilter[key];
       e.target.classList.toggle('active', typeFilter[key]);
-      saveFilterState();
+      pushUrlState();
       reloadWithNewFilter();
     });
   });
@@ -170,32 +171,55 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('toggle-owned').addEventListener('click', (e) => {
     filter.showOwned = !filter.showOwned;
     e.target.classList.toggle('active', filter.showOwned);
-    saveFilterState();
+    pushUrlState();
     reloadWithNewFilter();
   });
 
   document.getElementById('toggle-foreign').addEventListener('click', (e) => {
     filter.showForeign = !filter.showForeign;
     e.target.classList.toggle('active', filter.showForeign);
-    saveFilterState();
+    pushUrlState();
     reloadWithNewFilter();
   });
 
-  // Gateway tab: All Gateways
-  document.querySelector('.gateway-tab[data-gateway=""]').addEventListener('click', () => {
-    selectGateway(null);
-    collapseGatewaySelector();
+  initGatewayTabs(gwId => selectGateway(gwId), group => {
+    selectedGroup = group;
+    pushUrlState();
+    renderGatewayTabs();
+    reloadWithNewFilter();
   });
 
-  // Gateway expand/collapse
-  document.getElementById('gateway-expand-btn').addEventListener('click', toggleGatewayExpand);
-  document.addEventListener('click', (e) => {
-    const selector = document.querySelector('.gateway-selector');
-    const btn = document.getElementById('gateway-expand-btn');
-    if (selector.classList.contains('expanded') && !selector.contains(e.target) && !btn.contains(e.target)) {
-      collapseGatewaySelector();
-    }
+  // Search input — debounced server-side filter (1000ms)
+  let searchDebounceTimer = null;
+  searchEl.addEventListener('input', () => {
+    renderGatewayTabs();
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => { pushUrlState(); reloadWithNewFilter(); }, 1000);
   });
+
+  // Reset all filters
+  document.getElementById('reset-filters').addEventListener('click', () => {
+    selectedGateway = null;
+    selectedHours = 24;
+    selectedGroup = null;
+    document.getElementById('group-filter').value = '';
+    filter.showOwned = true;
+    filter.showForeign = true;
+    typeFilter = { up: true, join: true, down: true, ack: true };
+    searchEl.value = '';
+    rssiMinEl.value = -140;
+    rssiMaxEl.value = -30;
+    updateRssiLabel();
+    document.getElementById('toggle-owned').classList.add('active');
+    document.getElementById('toggle-foreign').classList.add('active');
+    ['up', 'join', 'down', 'ack'].forEach(k => document.getElementById(`toggle-${k}`).classList.add('active'));
+    renderGatewayTabs();
+    updateGatewayColumnVisibility();
+    pushUrlState();
+    reloadWithNewFilter();
+  });
+
+  updateNavLinks();
 });
 
 // API Helper
@@ -238,13 +262,6 @@ function isMyDevice(devAddr) {
   return false;
 }
 
-function shouldShowDevice(devAddr) {
-  const isOwned = isMyDevice(devAddr);
-  if (isOwned && filter.showOwned) return true;
-  if (!isOwned && filter.showForeign) return true;
-  return false;
-}
-
 function getOperatorStyle(operator) {
   const color = operatorColors[operator];
   if (color) return `style="color: ${color}"`;
@@ -260,42 +277,8 @@ async function loadGateways() {
 }
 
 function renderGatewayTabs() {
-  const container = document.getElementById('gateway-tabs');
-  container.innerHTML = gateways.map(gw => {
-    const label = gw.name || gw.gateway_id;
-    const title = gw.name ? `${gw.name} (${gw.gateway_id})` : gw.gateway_id;
-    return `
-    <button class="gateway-tab px-3 py-1 rounded text-xs" data-gateway="${gw.gateway_id}" title="${title}">
-      ${label}
-      <span class="text-gray-500 ml-1">${formatNumber(gw.packet_count)}</span>
-    </button>
-  `;
-  }).join('');
-
-  container.querySelectorAll('.gateway-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      selectGateway(tab.dataset.gateway);
-      collapseGatewaySelector();
-    });
-  });
-
-  applyGatewayActiveState();
+  buildGatewayTabs(gateways, selectedGateway, 'search-input', selectedGroup);
   updateGatewayColumnVisibility();
-  updateExpandBtnVisibility();
-}
-
-function applyGatewayActiveState() {
-  if (selectedGateway && gateways.some(gw => gw.gateway_id === selectedGateway)) {
-    document.querySelectorAll('.gateway-tab').forEach(tab => {
-      const isActive = (tab.dataset.gateway || null) === selectedGateway;
-      tab.classList.toggle('active', isActive);
-    });
-  } else {
-    selectedGateway = null;
-    document.querySelectorAll('.gateway-tab').forEach(tab => {
-      tab.classList.toggle('active', tab.dataset.gateway === '');
-    });
-  }
 }
 
 function updateGatewayColumnVisibility() {
@@ -305,27 +288,10 @@ function updateGatewayColumnVisibility() {
   });
 }
 
-function updateExpandBtnVisibility() {
-  const btn = document.getElementById('gateway-expand-btn');
-  btn.style.display = gateways.length > 0 ? '' : 'none';
-}
-
-function toggleGatewayExpand() {
-  const selector = document.querySelector('.gateway-selector');
-  const btn = document.getElementById('gateway-expand-btn');
-  selector.classList.toggle('expanded');
-  btn.classList.toggle('expanded');
-}
-
-function collapseGatewaySelector() {
-  document.querySelector('.gateway-selector').classList.remove('expanded');
-  document.getElementById('gateway-expand-btn').classList.remove('expanded');
-}
-
 function selectGateway(gatewayId) {
   selectedGateway = gatewayId;
-  saveSelectedGateway();
-  applyGatewayActiveState();
+  pushUrlState();
+  renderGatewayTabs();
   updateGatewayColumnVisibility();
 
   // Clear and reload
@@ -366,6 +332,14 @@ async function loadRecentPackets(gatewayId = null) {
     const rssiHi = parseInt(document.getElementById('rssi-max').value, 10);
     if (rssiLo > -140) params.set('rssi_min', rssiLo);
     if (rssiHi < -30) params.set('rssi_max', rssiHi);
+
+    // Add search filter
+    const searchVal = document.getElementById('search-input')?.value?.trim();
+    if (searchVal) params.set('search', searchVal);
+
+    // Add group filter (resolved to gateway IDs)
+    const groupGwIds = resolveGroupToGatewayIds(selectedGroup);
+    if (groupGwIds) params.set('gateway_ids', groupGwIds.join(','));
 
     const data = await api(`/api/packets/recent?${params}`);
     const packets = data.packets || [];
@@ -446,6 +420,14 @@ function connectWebSocket(gatewayId = null) {
     wsParams.set('filter_mode', 'foreign');
     wsParams.set('prefixes', filter.prefixes.join(','));
   }
+
+  // Add search filter
+  const searchVal = document.getElementById('search-input')?.value?.trim();
+  if (searchVal) wsParams.set('search', searchVal);
+
+  // Add group filter (resolved to gateway IDs)
+  const groupGwIds = resolveGroupToGatewayIds(selectedGroup);
+  if (groupGwIds) wsParams.set('gateway_ids', groupGwIds.join(','));
 
   const qs = wsParams.toString();
   if (qs) url += `?${qs}`;
