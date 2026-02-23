@@ -38,23 +38,25 @@ export async function gatewayRoutes(fastify: FastifyInstance): Promise<void> {
   // Get devices seen on gateway
   fastify.get<{
     Params: { id: string };
-    Querystring: { hours?: string; limit?: string; rssi_min?: string; rssi_max?: string };
+    Querystring: { hours?: string; limit?: string; rssi_min?: string; rssi_max?: string; group_name?: string };
   }>('/api/gateways/:id/devices', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
     const limit = parseInt(request.query.limit ?? '100', 10);
     const rssiMin = request.query.rssi_min ? parseInt(request.query.rssi_min, 10) : undefined;
     const rssiMax = request.query.rssi_max ? parseInt(request.query.rssi_max, 10) : undefined;
-    const devices = await getGatewayDevices(request.params.id, hours, limit, rssiMin, rssiMax);
+    const groupName = request.query.group_name || null;
+    const devices = await getGatewayDevices(request.params.id, hours, limit, rssiMin, rssiMax, groupName);
     return { devices };
   });
 
   // Get gateway tree (operators with device counts for lazy-load navigation)
   fastify.get<{
     Params: { id: string };
-    Querystring: { hours?: string };
+    Querystring: { hours?: string; group_name?: string };
   }>('/api/gateways/:id/tree', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
-    const operators = await getGatewayOperatorsWithDeviceCounts(request.params.id, hours);
+    const groupName = request.query.group_name || null;
+    const operators = await getGatewayOperatorsWithDeviceCounts(request.params.id, hours, groupName);
     return { operators };
   });
 

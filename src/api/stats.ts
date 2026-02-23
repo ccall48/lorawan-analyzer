@@ -34,23 +34,25 @@ function parseDeviceFilter(filterMode: string, prefixes?: string): DeviceFilter 
 export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
   // Get summary stats
   fastify.get<{
-    Querystring: { hours?: string; gateway_id?: string; filter_mode?: string; prefixes?: string };
+    Querystring: { hours?: string; gateway_id?: string; filter_mode?: string; prefixes?: string; group_name?: string };
   }>('/api/stats/summary', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
     const filterMode = request.query.filter_mode || 'all';
     const deviceFilter = parseDeviceFilter(filterMode, request.query.prefixes);
-    const stats = await getSummaryStats(hours, request.query.gateway_id, deviceFilter);
+    const groupName = request.query.group_name || null;
+    const stats = await getSummaryStats(hours, request.query.gateway_id, deviceFilter, groupName);
     return stats;
   });
 
   // Get operator stats
   fastify.get<{
-    Querystring: { hours?: string; gateway_id?: string; filter_mode?: string; prefixes?: string };
+    Querystring: { hours?: string; gateway_id?: string; filter_mode?: string; prefixes?: string; group_name?: string };
   }>('/api/stats/operators', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
     const filterMode = request.query.filter_mode || 'all';
     const deviceFilter = parseDeviceFilter(filterMode, request.query.prefixes);
-    const operators = await getOperatorStats(hours, request.query.gateway_id, deviceFilter);
+    const groupName = request.query.group_name || null;
+    const operators = await getOperatorStats(hours, request.query.gateway_id, deviceFilter, groupName);
     return { operators };
   });
 
@@ -83,6 +85,7 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       gateway_id?: string;
       filter_mode?: string;
       prefixes?: string;
+      group_name?: string;
     };
   }>('/api/stats/timeseries', async (request) => {
     const {
@@ -94,6 +97,7 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       gateway_id,
       filter_mode = 'all',
       prefixes,
+      group_name,
     } = request.query;
 
     const fromDate = from ? new Date(from) : new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -108,6 +112,7 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
       groupBy: group_by as 'gateway' | 'operator' | undefined,
       gatewayId: gateway_id,
       deviceFilter,
+      groupName: group_name || null,
     });
 
     return { data };
@@ -115,12 +120,13 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
 
   // Get duty cycle stats (all gateways)
   fastify.get<{
-    Querystring: { hours?: string; filter_mode?: string; prefixes?: string; gateway_id?: string };
+    Querystring: { hours?: string; filter_mode?: string; prefixes?: string; gateway_id?: string; group_name?: string };
   }>('/api/stats/duty-cycle', async (request) => {
     const hours = parseInt(request.query.hours ?? '1', 10);
     const filterMode = request.query.filter_mode || 'all';
     const deviceFilter = parseDeviceFilter(filterMode, request.query.prefixes);
-    const stats = await getDutyCycleStats(request.query.gateway_id || null, hours, deviceFilter);
+    const groupName = request.query.group_name || null;
+    const stats = await getDutyCycleStats(request.query.gateway_id || null, hours, deviceFilter, groupName);
     return { stats };
   });
 
@@ -139,33 +145,36 @@ export async function statsRoutes(fastify: FastifyInstance): Promise<void> {
   // Get channel distribution for a gateway
   fastify.get<{
     Params: { gatewayId: string };
-    Querystring: { hours?: string; filter_mode?: string; prefixes?: string };
+    Querystring: { hours?: string; filter_mode?: string; prefixes?: string; group_name?: string };
   }>('/api/spectrum/:gatewayId/channels', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
     const filterMode = request.query.filter_mode || 'all';
     const deviceFilter = parseDeviceFilter(filterMode, request.query.prefixes);
-    const channels = await getChannelDistribution(request.params.gatewayId, hours, deviceFilter);
+    const groupName = request.query.group_name || null;
+    const channels = await getChannelDistribution(request.params.gatewayId, hours, deviceFilter, groupName);
     return { channels };
   });
 
   // Get spreading factor distribution for a gateway
   fastify.get<{
     Params: { gatewayId: string };
-    Querystring: { hours?: string; filter_mode?: string; prefixes?: string };
+    Querystring: { hours?: string; filter_mode?: string; prefixes?: string; group_name?: string };
   }>('/api/spectrum/:gatewayId/spreading-factors', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
     const filterMode = request.query.filter_mode || 'all';
     const deviceFilter = parseDeviceFilter(filterMode, request.query.prefixes);
-    const spreadingFactors = await getSFDistribution(request.params.gatewayId, hours, deviceFilter);
+    const groupName = request.query.group_name || null;
+    const spreadingFactors = await getSFDistribution(request.params.gatewayId, hours, deviceFilter, groupName);
     return { spreadingFactors };
   });
 
   // Get downlink and tx_ack stats
   fastify.get<{
-    Querystring: { hours?: string; gateway_id?: string };
+    Querystring: { hours?: string; gateway_id?: string; group_name?: string };
   }>('/api/stats/downlinks', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
-    const stats = await getDownlinkStats(request.query.gateway_id || null, hours);
+    const groupName = request.query.group_name || null;
+    const stats = await getDownlinkStats(request.query.gateway_id || null, hours, groupName);
     return { stats };
   });
 }

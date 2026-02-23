@@ -26,12 +26,13 @@ export async function deviceRoutes(fastify: FastifyInstance): Promise<void> {
 
   // Get join requests
   fastify.get<{
-    Querystring: { gateway_id?: string; hours?: string; limit?: string };
+    Querystring: { gateway_id?: string; hours?: string; limit?: string; group_name?: string };
   }>('/api/joins', async (request) => {
     const hours = parseInt(request.query.hours ?? '24', 10);
     const limit = parseInt(request.query.limit ?? '100', 10);
     const gatewayId = request.query.gateway_id || null;
-    const joins = await getJoinRequests(gatewayId, hours, limit);
+    const groupName = request.query.group_name || null;
+    const joins = await getJoinRequests(gatewayId, hours, limit, groupName);
     return { joins };
   });
 

@@ -177,6 +177,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectedGroup = group;
     pushUrlState();
     renderGatewayTabs();
+    if (!selectedGateway) {
+      updateGatewayMap(getVisibleGateways());
+      loadAllData();
+    }
   });
 
   // Reset all filters
@@ -276,7 +280,7 @@ async function loadGateways() {
 
   // Update map based on selection
   if (!selectedGateway) {
-    updateGatewayMap(gateways);
+    updateGatewayMap(getVisibleGateways());
   } else {
     const selected = gateways.find(g => g.gateway_id === selectedGateway);
     updateGatewayMap(selected ? [selected] : []);
@@ -285,6 +289,13 @@ async function loadGateways() {
 
 function renderGatewayTabs() {
   buildGatewayTabs(gateways, selectedGateway, 'search-input', selectedGroup);
+}
+
+function getVisibleGateways() {
+  if (!selectedGroup) return gateways;
+  const noGroup = gw => !gw.group_name || gw.group_name.trim() === '';
+  if (selectedGroup === '__none__') return gateways.filter(noGroup);
+  return gateways.filter(gw => gw.group_name === selectedGroup);
 }
 
 function updateGatewayInfoPanel() {
@@ -313,7 +324,7 @@ function selectGateway(gatewayId) {
 
   // Update map based on selection
   if (!gatewayId) {
-    updateGatewayMap(gateways);
+    updateGatewayMap(getVisibleGateways());
   } else {
     const selected = gateways.find(g => g.gateway_id === gatewayId);
     updateGatewayMap(selected ? [selected] : []);
@@ -338,6 +349,7 @@ async function loadStats() {
   const filterParams = getFilterParams();
   const params = new URLSearchParams({ hours: selectedHours, ...filterParams });
   if (selectedGateway) params.set('gateway_id', selectedGateway);
+  else if (selectedGroup) params.set('group_name', selectedGroup);
 
   try {
     const data = await api(`/api/stats/summary?${params}`);
@@ -348,6 +360,7 @@ async function loadStats() {
     // Load RX airtime and TX duty cycle
     const dcParams = new URLSearchParams({ hours: selectedHours, ...filterParams });
     if (selectedGateway) dcParams.set('gateway_id', selectedGateway);
+    else if (selectedGroup) dcParams.set('group_name', selectedGroup);
     const dcData = await api(`/api/stats/duty-cycle?${dcParams}`);
     const dcStats = dcData.stats || {};
 
@@ -364,6 +377,7 @@ async function loadStats() {
     // Load downlink stats
     const dlParams = new URLSearchParams({ hours: selectedHours });
     if (selectedGateway) dlParams.set('gateway_id', selectedGateway);
+    else if (selectedGroup) dlParams.set('group_name', selectedGroup);
     const dlData = await api(`/api/stats/downlinks?${dlParams}`);
     const dlStats = dlData.stats || {};
 
@@ -470,6 +484,7 @@ async function loadTrafficChart() {
     ...filterParams
   });
   if (selectedGateway) params.set('gateway_id', selectedGateway);
+  else if (selectedGroup) params.set('group_name', selectedGroup);
   const from = new Date(Date.now() - selectedHours * 60 * 60 * 1000);
   params.set('from', from.toISOString());
 
@@ -513,6 +528,7 @@ async function loadOperatorChart() {
   const filterParams = getFilterParams();
   const params = new URLSearchParams({ hours: selectedHours, ...filterParams });
   if (selectedGateway) params.set('gateway_id', selectedGateway);
+  else if (selectedGroup) params.set('group_name', selectedGroup);
 
   const data = await api(`/api/stats/operators?${params}`);
   const operators = data.operators || [];
@@ -534,6 +550,7 @@ async function loadOperatorChart() {
 async function loadChannelChart() {
   const filterParams = getFilterParams();
   const params = new URLSearchParams({ hours: selectedHours, ...filterParams });
+  if (!selectedGateway && selectedGroup) params.set('group_name', selectedGroup);
   const data = await api(`/api/spectrum/${selectedGateway || 'all'}/channels?${params}`);
   const channels = (data.channels || []).filter(c => c.packet_count > 0 && c.frequency > 0);
 
@@ -550,6 +567,7 @@ async function loadChannelChart() {
 async function loadSFChart() {
   const filterParams = getFilterParams();
   const params = new URLSearchParams({ hours: selectedHours, ...filterParams });
+  if (!selectedGateway && selectedGroup) params.set('group_name', selectedGroup);
   const data = await api(`/api/spectrum/${selectedGateway || 'all'}/spreading-factors?${params}`);
   const sfs = data.spreadingFactors || [];
 
@@ -579,13 +597,17 @@ async function loadDeviceBreakdown() {
 
   const params = new URLSearchParams({ hours: selectedHours, limit: 100 });
   if (selectedGateway) params.set('gateway_id', selectedGateway);
+  else if (selectedGroup) params.set('group_name', selectedGroup);
   if (rssiFilterMin > -140) params.set('rssi_min', rssiFilterMin);
   if (rssiFilterMax < -30) params.set('rssi_max', rssiFilterMax);
+
+  const treeParams = new URLSearchParams({ hours: selectedHours });
+  if (!selectedGateway && selectedGroup) treeParams.set('group_name', selectedGroup);
 
   try {
     // Fetch both tree (operators) and devices data
     const [treeData, devicesData] = await Promise.all([
-      api(`/api/gateways/${selectedGateway || 'all'}/tree?hours=${selectedHours}`),
+      api(`/api/gateways/${selectedGateway || 'all'}/tree?${treeParams}`),
       api(`/api/gateways/${selectedGateway || 'all'}/devices?${params}`)
     ]);
 
@@ -770,6 +792,7 @@ async function loadRecentJoins() {
   const container = document.getElementById('recent-joins');
   const params = new URLSearchParams({ hours: selectedHours, limit: 15 });
   if (selectedGateway) params.set('gateway_id', selectedGateway);
+  else if (selectedGroup) params.set('group_name', selectedGroup);
 
   try {
     const data = await api(`/api/joins?${params}`);

@@ -23,6 +23,22 @@ export type DeviceFilter = {
   exclude?: Array<{ prefix: number; mask: number }>;
 };
 
+// Build a raw SQL string fragment for gateway filtering by ID or group name.
+// When groupName is provided and gatewayId is not, returns an IN subquery.
+function buildGatewayFilterSql(tableAlias: string, gatewayId?: string | null, groupName?: string | null): string {
+  const col = tableAlias ? `${tableAlias}.gateway_id` : 'gateway_id';
+  if (gatewayId && gatewayId !== 'all') {
+    return `AND ${col} = '${gatewayId.replace(/'/g, "''")}'`;
+  }
+  if (groupName) {
+    if (groupName === '__none__') {
+      return `AND ${col} IN (SELECT gateway_id FROM gateways WHERE group_name IS NULL OR group_name = '')`;
+    }
+    return `AND ${col} IN (SELECT gateway_id FROM gateways WHERE group_name = '${groupName.replace(/'/g, "''")}')`;
+  }
+  return '';
+}
+
 // Build a raw SQL string fragment for device address filtering.
 // Uses the dev_addr_uint32() helper function created in migrations.
 function buildDeviceFilterSql(filter?: DeviceFilter): string {
@@ -328,7 +344,8 @@ export async function getGatewayDevices(
   hours: number = 24,
   limit: number = 100,
   rssiMin?: number,
-  rssiMax?: number
+  rssiMax?: number,
+  groupName?: string | null
 ): Promise<Array<{
   dev_addr: string;
   operator: string;
@@ -348,9 +365,8 @@ export async function getGatewayDevices(
 }>> {
   const sql = getDb();
 
-  const gatewayFilter = gatewayId && gatewayId !== 'all'
-    ? sql`AND gateway_id = ${gatewayId}`
-    : sql``;
+  const gwFilterRaw = buildGatewayFilterSql('', gatewayId, groupName);
+  const gwFilterP = buildGatewayFilterSql('p', gatewayId, groupName);
 
   const rssiHaving: string[] = [];
   if (rssiMin !== undefined) rssiHaving.push(`AVG(p.rssi) >= ${rssiMin}`);
@@ -367,7 +383,7 @@ export async function getGatewayDevices(
       WHERE packet_type = 'data'
         AND f_cnt IS NOT NULL
         AND timestamp > NOW() - make_interval(hours => ${hours})
-        ${gatewayId && gatewayId !== 'all' ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : ''}
+        ${gwFilterRaw}
     ),
     loss_stats AS (
       SELECT
@@ -403,7 +419,7 @@ export async function getGatewayDevices(
     LEFT JOIN loss_stats l ON p.dev_addr = l.dev_addr
     WHERE p.packet_type = 'data'
       AND p.timestamp > NOW() - make_interval(hours => ${hours})
-      ${gatewayId && gatewayId !== 'all' ? `AND p.gateway_id = '${gatewayId.replace(/'/g, "''")}'` : ''}
+      ${gwFilterP}
     GROUP BY p.dev_addr, l.missed
     ${havingClause}
     ORDER BY packet_count DESC
@@ -547,7 +563,8 @@ export async function getDevicePacketLoss(
 export async function getJoinRequests(
   gatewayId: string | null = null,
   hours: number = 24,
-  limit: number = 100
+  limit: number = 100,
+  groupName?: string | null
 ): Promise<Array<{
   timestamp: string;
   gateway_id: string;
@@ -558,26 +575,27 @@ export async function getJoinRequests(
   snr: number;
 }>> {
   const sql = getDb();
+  const gwFilter = buildGatewayFilterSql('', gatewayId, groupName);
 
-  const rows = await sql<Array<{
-    timestamp: Date;
-    gateway_id: string;
-    join_eui: string;
-    dev_eui: string;
-    operator: string;
-    rssi: number;
-    snr: number;
-  }>>`
+  const rows = await sql.unsafe(`
     SELECT timestamp, gateway_id, join_eui, dev_eui, operator, rssi, snr
     FROM packets
     WHERE packet_type = 'join_request'
       AND timestamp > NOW() - make_interval(hours => ${hours})
-      ${gatewayId ? sql`AND gateway_id = ${gatewayId}` : sql``}
+      ${gwFilter}
     ORDER BY timestamp DESC
     LIMIT ${limit}
-  `;
+  `) as Array<Record<string, unknown>>;
 
-  return rows.map(r => ({ ...r, timestamp: r.timestamp.toISOString() }));
+  return rows.map(r => ({
+    timestamp: r.timestamp instanceof Date ? (r.timestamp as Date).toISOString() : String(r.timestamp),
+    gateway_id: r.gateway_id as string,
+    join_eui: r.join_eui as string,
+    dev_eui: r.dev_eui as string,
+    operator: r.operator as string,
+    rssi: Number(r.rssi),
+    snr: Number(r.snr),
+  }));
 }
 
 export async function getTimeSeries(options: {
@@ -588,6 +606,7 @@ export async function getTimeSeries(options: {
   groupBy?: 'gateway' | 'operator';
   gatewayId?: string;
   deviceFilter?: DeviceFilter;
+  groupName?: string | null;
 }): Promise<TimeSeriesPoint[]> {
   const sql = getDb();
 
@@ -599,6 +618,7 @@ export async function getTimeSeries(options: {
     groupBy,
     gatewayId,
     deviceFilter,
+    groupName,
   } = options;
 
   const groupByExpr = groupBy === 'gateway'
@@ -619,7 +639,7 @@ export async function getTimeSeries(options: {
   if ((interval === '1h' || interval === '1d') && !deviceFilter) {
     const metricCol = metric === 'airtime' ? 'SUM(airtime_us_sum) / 1000000' : 'SUM(packet_count)';
     const operatorFilter = groupByExpr === 'operator' ? `AND packet_type = 'data'` : '';
-    const gwFilter = gatewayId ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
+    const gwFilter = buildGatewayFilterSql('', gatewayId, groupName);
 
     const selectGroup = groupByExpr ? `, ${groupByExpr} AS group_name` : '';
     const groupExtra = groupByExpr ? `, ${groupByExpr}` : '';
@@ -648,7 +668,7 @@ export async function getTimeSeries(options: {
   // Raw packets query for 5m/15m or when device filter applies
   const metricExpr = metric === 'airtime' ? 'SUM(airtime_us) / 1000000.0' : 'COUNT(*)';
   const operatorFilter = groupByExpr === 'operator' ? `AND packet_type = 'data'` : '';
-  const gwFilter = gatewayId ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
+  const gwFilter = buildGatewayFilterSql('', gatewayId, groupName);
   const deviceFilterSql = buildDeviceFilterSql(deviceFilter);
 
   const selectGroup = groupByExpr ? `, ${groupByExpr} AS group_name` : '';
@@ -750,16 +770,13 @@ export async function deleteHideRule(id: number): Promise<void> {
 
 export async function getGatewayOperatorsWithDeviceCounts(
   gatewayId: string,
-  hours: number = 24
+  hours: number = 24,
+  groupName?: string | null
 ): Promise<TreeOperator[]> {
   const sql = getDb();
+  const gwFilter = buildGatewayFilterSql('', gatewayId !== 'all' ? gatewayId : null, groupName);
 
-  const rows = await sql<Array<{
-    operator: string;
-    device_count: string;
-    packet_count: string;
-    airtime_ms: string;
-  }>>`
+  const rows = await sql.unsafe(`
     SELECT
       operator,
       COUNT(DISTINCT dev_addr) AS device_count,
@@ -768,13 +785,13 @@ export async function getGatewayOperatorsWithDeviceCounts(
     FROM packets
     WHERE timestamp > NOW() - make_interval(hours => ${hours})
       AND packet_type = 'data'
-      ${gatewayId !== 'all' ? sql`AND gateway_id = ${gatewayId}` : sql``}
+      ${gwFilter}
     GROUP BY operator
     ORDER BY packet_count DESC
-  `;
+  `) as Array<Record<string, unknown>>;
 
   return rows.map(r => ({
-    operator: r.operator,
+    operator: r.operator as string,
     device_count: Number(r.device_count),
     packet_count: Number(r.packet_count),
     airtime_ms: Number(r.airtime_ms),
@@ -1025,12 +1042,14 @@ export async function getDeviceDistributions(
 export async function getDutyCycleStats(
   gatewayId: string | null,
   hours: number = 1,
-  deviceFilter?: DeviceFilter
+  deviceFilter?: DeviceFilter,
+  groupName?: string | null
 ): Promise<SpectrumStats> {
   const sql = getDb();
 
   const deviceFilterSql = buildDeviceFilterSql(deviceFilter);
   const windowUs = hours * 3600 * 1_000_000;
+  const gwFilter = buildGatewayFilterSql('', gatewayId, groupName);
 
   let rows: Array<{
     rx_airtime_us: string;
@@ -1039,7 +1058,7 @@ export async function getDutyCycleStats(
     tx_duty_cycle_percent: string;
   }>;
 
-  if (gatewayId) {
+  if (gatewayId && gatewayId !== 'all') {
     rows = await sql.unsafe(`
       SELECT
         SUM(CASE WHEN packet_type NOT IN ('downlink', 'tx_ack') THEN airtime_us ELSE 0 END) AS rx_airtime_us,
@@ -1048,7 +1067,7 @@ export async function getDutyCycleStats(
         SUM(CASE WHEN packet_type = 'downlink' THEN airtime_us ELSE 0 END)::float / ${windowUs} * 100 AS tx_duty_cycle_percent
       FROM packets
       WHERE timestamp > NOW() - make_interval(hours => ${hours})
-        AND gateway_id = '${gatewayId.replace(/'/g, "''")}'
+        ${gwFilter}
         ${deviceFilterSql}
     `);
   } else {
@@ -1067,6 +1086,7 @@ export async function getDutyCycleStats(
           SUM(CASE WHEN packet_type = 'downlink' THEN airtime_us ELSE 0 END)::float / ${windowUs} * 100 AS gw_tx_pct
         FROM packets
         WHERE timestamp > NOW() - make_interval(hours => ${hours})
+          ${gwFilter}
           ${deviceFilterSql}
         GROUP BY gateway_id
       ) sub
@@ -1092,16 +1112,13 @@ export interface DownlinkStats {
 
 export async function getDownlinkStats(
   gatewayId: string | null,
-  hours: number = 24
+  hours: number = 24,
+  groupName?: string | null
 ): Promise<DownlinkStats> {
   const sql = getDb();
+  const gwFilter = buildGatewayFilterSql('', gatewayId, groupName);
 
-  const rows = await sql<Array<{
-    downlinks: string;
-    tx_ack_ok: string;
-    tx_ack_failed: string;
-    tx_ack_duty_cycle: string;
-  }>>`
+  const rows = await sql.unsafe(`
     SELECT
       COUNT(*) FILTER (WHERE packet_type = 'downlink') AS downlinks,
       COUNT(*) FILTER (WHERE packet_type = 'tx_ack' AND f_port = 1) AS tx_ack_ok,
@@ -1109,8 +1126,8 @@ export async function getDownlinkStats(
       COUNT(*) FILTER (WHERE packet_type = 'tx_ack' AND f_port = 11) AS tx_ack_duty_cycle
     FROM packets
     WHERE timestamp > NOW() - make_interval(hours => ${hours})
-      ${gatewayId ? sql`AND gateway_id = ${gatewayId}` : sql``}
-  `;
+      ${gwFilter}
+  `) as Array<Record<string, unknown>>;
 
   const r = rows[0] ?? { downlinks: '0', tx_ack_ok: '0', tx_ack_failed: '0', tx_ack_duty_cycle: '0' };
   return {
@@ -1124,11 +1141,12 @@ export async function getDownlinkStats(
 export async function getChannelDistribution(
   gatewayId: string,
   hours: number = 24,
-  deviceFilter?: DeviceFilter
+  deviceFilter?: DeviceFilter,
+  groupName?: string | null
 ): Promise<ChannelStats[]> {
   const sql = getDb();
 
-  const gwFilter = gatewayId !== 'all' ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
+  const gwFilter = buildGatewayFilterSql('', gatewayId !== 'all' ? gatewayId : null, groupName);
 
   // Use continuous aggregate when no device filter
   if (!deviceFilter && hours >= 1) {
@@ -1193,11 +1211,12 @@ export async function getChannelDistribution(
 export async function getSFDistribution(
   gatewayId: string,
   hours: number = 24,
-  deviceFilter?: DeviceFilter
+  deviceFilter?: DeviceFilter,
+  groupName?: string | null
 ): Promise<SFStats[]> {
   const sql = getDb();
 
-  const gwFilter = gatewayId !== 'all' ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
+  const gwFilter = buildGatewayFilterSql('', gatewayId !== 'all' ? gatewayId : null, groupName);
 
   // Use continuous aggregate when no device filter
   if (!deviceFilter && hours >= 1) {
@@ -1338,31 +1357,44 @@ export async function getJoinEuiTimeline(
 export async function getSummaryStats(
   hours: number = 24,
   gatewayId?: string,
-  deviceFilter?: DeviceFilter
+  deviceFilter?: DeviceFilter,
+  groupName?: string | null
 ): Promise<{ total_packets: number; unique_devices: number; total_airtime_ms: number }> {
   const sql = getDb();
 
-  // Use continuous aggregate when no device filter
+  const gwFilter = buildGatewayFilterSql('', gatewayId, groupName);
+
+  // packets_hourly unique_devices is grouped by (hour, gateway_id, operator, packet_type)
+  // and cannot be safely summed across any dimension — always use raw packets for unique_devices.
+  // Use the aggregate only for total_packets and airtime where SUM is correct.
   if (!deviceFilter && hours >= 1) {
-    const gwFilter = gatewayId ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
-    const rows = await sql.unsafe(`
-      SELECT
-        SUM(packet_count) AS total_packets,
-        SUM(unique_devices) AS unique_devices,
-        SUM(airtime_us_sum) / 1000 AS total_airtime_ms
-      FROM packets_hourly
-      WHERE hour >= time_bucket('1 hour', NOW() - make_interval(hours => ${hours}))
-        ${gwFilter}
-    `);
-    const r = (rows as Array<Record<string, unknown>>)[0];
+    const [aggRows, devRows] = await Promise.all([
+      sql.unsafe(`
+        SELECT
+          SUM(packet_count) AS total_packets,
+          SUM(airtime_us_sum) / 1000 AS total_airtime_ms
+        FROM packets_hourly
+        WHERE hour >= time_bucket('1 hour', NOW() - make_interval(hours => ${hours}))
+          ${gwFilter}
+      `),
+      sql.unsafe(`
+        SELECT COUNT(DISTINCT dev_addr) AS unique_devices
+        FROM packets
+        WHERE packet_type = 'data'
+          AND dev_addr IS NOT NULL
+          AND timestamp > NOW() - make_interval(hours => ${hours})
+          ${gwFilter}
+      `),
+    ]);
+    const agg = (aggRows as Array<Record<string, unknown>>)[0];
+    const dev = (devRows as Array<Record<string, unknown>>)[0];
     return {
-      total_packets: Number(r?.total_packets ?? 0),
-      unique_devices: Number(r?.unique_devices ?? 0),
-      total_airtime_ms: Number(r?.total_airtime_ms ?? 0),
+      total_packets: Number(agg?.total_packets ?? 0),
+      unique_devices: Number(dev?.unique_devices ?? 0),
+      total_airtime_ms: Number(agg?.total_airtime_ms ?? 0),
     };
   }
 
-  const gatewayFilterSql = gatewayId ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
   const deviceFilterSql = buildDeviceFilterSql(deviceFilter);
 
   const rows = await sql.unsafe(`
@@ -1372,7 +1404,7 @@ export async function getSummaryStats(
       SUM(airtime_us) / 1000 AS total_airtime_ms
     FROM packets
     WHERE timestamp > NOW() - make_interval(hours => ${hours})
-      ${gatewayFilterSql}
+      ${gwFilter}
       ${deviceFilterSql}
   `);
 
@@ -1387,35 +1419,50 @@ export async function getSummaryStats(
 export async function getOperatorStats(
   hours: number = 24,
   gatewayId?: string,
-  deviceFilter?: DeviceFilter
+  deviceFilter?: DeviceFilter,
+  groupName?: string | null
 ): Promise<OperatorStats[]> {
   const sql = getDb();
 
-  // Use continuous aggregate when no device filter
+  const gwFilter = buildGatewayFilterSql('', gatewayId, groupName);
+
+  // packets_hourly unique_devices cannot be safely summed across hours or operators.
+  // Always use raw packets for unique_devices; use aggregate only for packet_count and airtime.
   if (!deviceFilter && hours >= 1) {
-    const gwFilter = gatewayId ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
-    const rows = await sql.unsafe(`
-      SELECT
-        operator,
-        SUM(packet_count) AS packet_count,
-        SUM(unique_devices) AS unique_devices,
-        SUM(airtime_us_sum) / 1000 AS total_airtime_ms
-      FROM packets_hourly
-      WHERE hour >= time_bucket('1 hour', NOW() - make_interval(hours => ${hours}))
-        AND packet_type = 'data'
-        ${gwFilter}
-      GROUP BY operator
-      ORDER BY packet_count DESC
-    `);
-    return (rows as Array<Record<string, unknown>>).map(r => ({
+    const [aggRows, devRows] = await Promise.all([
+      sql.unsafe(`
+        SELECT
+          operator,
+          SUM(packet_count) AS packet_count,
+          SUM(airtime_us_sum) / 1000 AS total_airtime_ms
+        FROM packets_hourly
+        WHERE hour >= time_bucket('1 hour', NOW() - make_interval(hours => ${hours}))
+          AND packet_type = 'data'
+          ${gwFilter}
+        GROUP BY operator
+        ORDER BY packet_count DESC
+      `),
+      sql.unsafe(`
+        SELECT operator, COUNT(DISTINCT dev_addr) AS unique_devices
+        FROM packets
+        WHERE packet_type = 'data'
+          AND dev_addr IS NOT NULL
+          AND timestamp > NOW() - make_interval(hours => ${hours})
+          ${gwFilter}
+        GROUP BY operator
+      `),
+    ]);
+    const devMap = new Map(
+      (devRows as Array<Record<string, unknown>>).map(r => [r.operator as string, Number(r.unique_devices)])
+    );
+    return (aggRows as Array<Record<string, unknown>>).map(r => ({
       operator: r.operator as string,
       packet_count: Number(r.packet_count),
-      unique_devices: Number(r.unique_devices),
+      unique_devices: devMap.get(r.operator as string) ?? 0,
       total_airtime_ms: Number(r.total_airtime_ms),
     }));
   }
 
-  const gatewayFilterSql = gatewayId ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : '';
   const deviceFilterSql = buildDeviceFilterSql(deviceFilter);
 
   const rows = await sql.unsafe(`
@@ -1427,7 +1474,7 @@ export async function getOperatorStats(
     FROM packets
     WHERE timestamp > NOW() - make_interval(hours => ${hours})
       AND packet_type = 'data'
-      ${gatewayFilterSql}
+      ${gwFilter}
       ${deviceFilterSql}
     GROUP BY operator
     ORDER BY packet_count DESC
