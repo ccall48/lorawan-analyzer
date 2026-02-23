@@ -755,16 +755,96 @@ body {
   min-width: 80px;
 }
 
-/* Group filter dropdown */
-#group-filter {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.8);
-  cursor: pointer;
+/* Search wrap with clear button */
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 
-#group-filter option {
-  background: #1a1210;
+.search-wrap #search-input {
+  padding-right: 20px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 4px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+}
+
+.search-clear:hover {
   color: rgba(255, 255, 255, 0.8);
+}
+
+.search-clear.hidden {
+  display: none;
+}
+
+/* Header search inputs */
+#search-input,
+#device-search {
+  background: #180e0a;
+  color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  outline: none;
+}
+
+#search-input::placeholder,
+#device-search::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+#search-input:hover,
+#device-search:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+#search-input:focus,
+#device-search:focus {
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+/* Header select dropdowns (group filter, device filter mode) */
+#group-filter,
+#device-filter-mode {
+  background: #180e0a;
+  color: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.35)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 20px !important;
+}
+
+#group-filter:hover,
+#device-filter-mode:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+#group-filter:focus,
+#device-filter-mode:focus {
+  border-color: rgba(255, 255, 255, 0.35);
+  outline: none;
+}
+
+#group-filter option,
+#device-filter-mode option {
+  background: #180e0a;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 /* Dual RSSI range slider */

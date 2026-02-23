@@ -10,6 +10,15 @@ import {
   getDevicePacketLoss,
   getJoinRequestsByJoinEui,
   getJoinEuiTimeline,
+  getCsDeviceByEui,
+  getCsDeviceProfile,
+  getCsDeviceActivity,
+  getCsDeviceSignalTrends,
+  getCsDeviceDistributions,
+  getCsDeviceFCntTimeline,
+  getCsDevicePacketIntervals,
+  getCsDevicePacketLoss,
+  getCsRecentPackets,
 } from '../db/queries.js';
 
 export async function deviceRoutes(fastify: FastifyInstance): Promise<void> {
@@ -123,5 +132,104 @@ export async function deviceRoutes(fastify: FastifyInstance): Promise<void> {
     const hours = parseInt(request.query.hours ?? '24', 10);
     const timeline = await getJoinEuiTimeline(request.params.joinEui.toUpperCase(), hours);
     return { timeline };
+  });
+
+  // ===== ChirpStack device endpoints =====
+
+  // Get CS device by EUI
+  fastify.get<{
+    Params: { deveui: string };
+  }>('/api/cs-devices/by-eui/:deveui', async (request, reply) => {
+    const device = await getCsDeviceByEui(request.params.deveui.toUpperCase());
+    if (!device) {
+      reply.code(404);
+      return { error: 'Device not found' };
+    }
+    return { device };
+  });
+
+  // Get CS device profile
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string };
+  }>('/api/cs-devices/:deveui/profile', async (request, reply) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const profile = await getCsDeviceProfile(request.params.deveui.toUpperCase(), hours);
+    if (!profile) {
+      reply.code(404);
+      return { error: 'Device not found' };
+    }
+    return { profile };
+  });
+
+  // Get CS device activity
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string };
+  }>('/api/cs-devices/:deveui/activity', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const activity = await getCsDeviceActivity(request.params.deveui.toUpperCase(), hours);
+    return { activity };
+  });
+
+  // Get CS device signal trends
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string };
+  }>('/api/cs-devices/:deveui/signal-trends', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const trends = await getCsDeviceSignalTrends(request.params.deveui.toUpperCase(), hours);
+    return { trends };
+  });
+
+  // Get CS device distributions
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string };
+  }>('/api/cs-devices/:deveui/distributions', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const distributions = await getCsDeviceDistributions(request.params.deveui.toUpperCase(), hours);
+    return { distributions };
+  });
+
+  // Get CS device FCnt timeline
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string };
+  }>('/api/cs-devices/:deveui/fcnt-timeline', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const timeline = await getCsDeviceFCntTimeline(request.params.deveui.toUpperCase(), hours);
+    return { timeline };
+  });
+
+  // Get CS device packet intervals
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string };
+  }>('/api/cs-devices/:deveui/intervals', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const intervals = await getCsDevicePacketIntervals(request.params.deveui.toUpperCase(), hours);
+    return { intervals };
+  });
+
+  // Get CS device packet loss
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string };
+  }>('/api/cs-devices/:deveui/packet-loss', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const loss = await getCsDevicePacketLoss(request.params.deveui.toUpperCase(), hours);
+    return { loss };
+  });
+
+  // Get recent CS device packets
+  fastify.get<{
+    Params: { deveui: string };
+    Querystring: { hours?: string; limit?: string };
+  }>('/api/cs-devices/:deveui/packets', async (request) => {
+    const limit = parseInt(request.query.limit ?? '200', 10);
+    const packets = await getCsRecentPackets(limit, null);
+    // Filter to this device
+    return { packets: packets.filter(p => p.dev_eui === request.params.deveui.toUpperCase()) };
   });
 }

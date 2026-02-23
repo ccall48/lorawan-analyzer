@@ -2,7 +2,9 @@
 const BASE_PATH = window.location.pathname.replace(/\/[^/]*$/, '');
 const params = new URLSearchParams(window.location.search);
 const devAddr = params.get('addr');
+const devEui = params.get('eui');  // ChirpStack mode entry point
 const gatewayId = params.get('gateway') || null;
+const isCsMode = !!devEui && !devAddr;
 
 let selectedHours = parseInt(params.get('hours'), 10) || 24;
 let filter = { prefixes: [] };
@@ -20,15 +22,15 @@ let intervalChart = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-  if (!devAddr) {
+  if (!devAddr && !devEui) {
     document.getElementById('loading').classList.add('hidden');
     document.getElementById('error').classList.remove('hidden');
     document.getElementById('error').textContent = 'No device address specified';
     return;
   }
 
-  document.getElementById('device-addr').textContent = devAddr;
-  document.title = `${devAddr} - LoRaWAN Analyzer`;
+  document.getElementById('device-addr').textContent = devAddr || devEui;
+  document.title = `${devAddr || devEui} - LoRaWAN Analyzer`;
 
   await Promise.all([loadMyDevicesConfig(), loadOperatorColors()]);
 
@@ -47,7 +49,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     },
   });
 
-  loadDeviceData();
+  if (isCsMode) {
+    loadCsDeviceData();
+  } else {
+    loadDeviceData();
+  }
 
   // Wire nav + back links to carry shared URL params back to other pages
   updateNavLinks();
@@ -61,7 +67,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       updateNavLinks();
-      loadDeviceData();
+      if (isCsMode) {
+        loadCsDeviceData();
+      } else {
+        loadDeviceData();
+      }
     });
   });
 });
@@ -70,6 +80,7 @@ function updateNavLinks() {
   // Start from all params we arrived with, override hours, drop device-specific ones
   const p = new URLSearchParams(params);
   p.delete('addr');
+  p.delete('eui');
   p.delete('gateway');
   if (selectedHours !== 24) p.set('hours', selectedHours); else p.delete('hours');
   const qs = p.toString();
@@ -222,6 +233,124 @@ async function loadDeviceData() {
     document.getElementById('loading').classList.add('hidden');
     document.getElementById('error').classList.remove('hidden');
     document.getElementById('error').textContent = 'Failed to load device data';
+  }
+}
+
+// Load device data from ChirpStack tables (devEUI-based)
+async function loadCsDeviceData() {
+  try {
+    const [profileRes, distRes, trendsRes, activityRes, fcntRes, intervalsRes, lossRes] = await Promise.all([
+      api(`/api/cs-devices/${devEui}/profile?hours=${selectedHours}`),
+      api(`/api/cs-devices/${devEui}/distributions?hours=${selectedHours}`),
+      api(`/api/cs-devices/${devEui}/signal-trends?hours=${selectedHours}`),
+      api(`/api/cs-devices/${devEui}/activity?hours=${selectedHours}`),
+      api(`/api/cs-devices/${devEui}/fcnt-timeline?hours=${selectedHours}`),
+      api(`/api/cs-devices/${devEui}/intervals?hours=${selectedHours}`),
+      api(`/api/cs-devices/${devEui}/packet-loss?hours=${selectedHours}`)
+    ]);
+
+    const profile = profileRes.profile;
+    if (!profile) {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('error').classList.remove('hidden');
+      return;
+    }
+
+    const dist = distRes.distributions || {};
+    const trends = trendsRes.trends || [];
+    const activity = activityRes.activity || [];
+    const fcntTimeline = fcntRes.timeline || [];
+    const intervals = intervalsRes.intervals || [];
+    const loss = lossRes.loss || { total_received: 0, total_missed: 0, loss_percent: 0, per_gateway: [] };
+
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('content').classList.remove('hidden');
+
+    // Update header with device name
+    document.getElementById('device-addr').textContent = profile.device_name || devEui;
+    document.title = `${profile.device_name || devEui} - LoRaWAN Analyzer`;
+
+    const opEl = document.getElementById('device-operator');
+    opEl.textContent = profile.application_name || profile.application_id || '';
+    opEl.className = 'text-sm px-2 py-0.5 rounded';
+    opEl.style.color = '#22c55e';
+    document.getElementById('device-ownership').textContent = '(ChirpStack)';
+
+    // Stats
+    const avgInterval = calculateAvgIntervalFromFCnt(fcntTimeline);
+    document.getElementById('stat-packets').textContent = formatNumber(profile.packet_count);
+    document.getElementById('stat-airtime').textContent = formatAirtime(profile.total_airtime_ms || 0);
+
+    const timeWindowMs = selectedHours * 3600 * 1000;
+    const dutyCyclePercent = timeWindowMs > 0 ? ((profile.total_airtime_ms || 0) / timeWindowMs) * 100 : 0;
+    const dutyClass = dutyCyclePercent >= 1 ? 'duty-high' : dutyCyclePercent >= 0.1 ? 'duty-medium' : 'duty-low';
+    document.getElementById('stat-duty').innerHTML = `<span class="${dutyClass}">${formatPercent(dutyCyclePercent)}</span>`;
+
+    document.getElementById('stat-interval').textContent = avgInterval > 0 ? formatInterval(avgInterval) : '-';
+
+    const rssiEl = document.getElementById('stat-rssi');
+    rssiEl.textContent = `${profile.avg_rssi?.toFixed(1) || '?'}`;
+    rssiEl.className = `value ${profile.avg_rssi > -100 ? 'good' : profile.avg_rssi > -115 ? 'medium' : 'bad'}`;
+
+    const snrEl = document.getElementById('stat-snr');
+    snrEl.textContent = `${profile.avg_snr?.toFixed(1) || '?'}`;
+    snrEl.className = `value ${profile.avg_snr > 5 ? 'good' : profile.avg_snr > 0 ? 'medium' : 'bad'}`;
+
+    document.getElementById('stat-first').textContent = formatDateTime(profile.first_seen);
+    document.getElementById('stat-last').textContent = formatDateTime(profile.last_seen);
+    document.getElementById('stat-gateways').textContent = '-';
+
+    document.getElementById('stat-loss').textContent = `${loss.loss_percent.toFixed(1)}%`;
+    document.getElementById('stat-loss').className = `value ${loss.loss_percent < 1 ? 'good' : loss.loss_percent < 5 ? 'medium' : 'bad'}`;
+    document.getElementById('stat-missed').textContent = formatNumber(loss.total_missed);
+
+    // Reuse existing chart renderers — same data format
+    renderRSSIChart(trends);
+    renderSNRChart(trends);
+    renderSFChart(dist.sf || []);
+    renderFreqChart(dist.frequency || []);
+    renderGatewayChart([], []);  // CS packets have no gateway breakdown
+    renderFCntChart(fcntTimeline);
+    renderLossChart(fcntTimeline);
+    renderIntervalChart(intervals);
+    loadCsRecentPacketsForDevice();
+  } catch (e) {
+    console.error('Failed to load CS device data:', e);
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('error').classList.remove('hidden');
+    document.getElementById('error').textContent = 'Failed to load device data';
+  }
+}
+
+async function loadCsRecentPacketsForDevice() {
+  try {
+    const data = await api(`/api/cs-devices/${devEui}/packets?limit=200`);
+    const packets = (data.packets || []).map(p => {
+      const freqMhz = p.frequency > 1000000 ? p.frequency / 1000000 : p.frequency;
+      const dataRate = p.spreading_factor
+        ? `SF${p.spreading_factor}BW${(p.bandwidth || 125000) / 1000}`
+        : '-';
+      return {
+        timestamp: parseUTCTimestamp(p.timestamp).getTime(),
+        gateway_id: '',
+        type: 'data',
+        dev_addr: p.dev_addr,
+        f_cnt: p.f_cnt,
+        f_port: p.f_port,
+        dev_eui: p.dev_eui,
+        operator: p.operator,
+        data_rate: dataRate,
+        frequency: freqMhz,
+        rssi: p.rssi,
+        snr: p.snr,
+        payload_size: p.payload_size,
+        airtime_ms: p.airtime_us ? p.airtime_us / 1000 : 0,
+        confirmed: p.confirmed,
+      };
+    });
+    setPacketFeedData(packets);
+  } catch (e) {
+    console.error('Failed to load CS recent packets for device:', e);
   }
 }
 

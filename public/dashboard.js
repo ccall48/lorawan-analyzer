@@ -6,7 +6,7 @@ let selectedGateway = null;
 let selectedHours = 24;
 let selectedGroup = null;
 let gateways = [];
-let filter = { showOwned: true, showForeign: true, prefixes: [] };
+let filter = { mode: 'all', prefixes: [] };
 let operatorColors = {};
 let deviceSearchText = '';
 let rssiFilterMin = -200;
@@ -18,8 +18,7 @@ function readUrlState() {
   selectedGateway = p.get('gw') || null;
   selectedHours   = parseInt(p.get('hours') || '24', 10) || 24;
   selectedGroup   = p.get('group') || null;
-  filter.showOwned   = p.get('owned')   !== '0';
-  filter.showForeign = p.get('foreign') !== '0';
+  filter.mode     = p.get('mode') || 'all';
   return {
     rssiMin:      p.get('rssi_min'),
     rssiMax:      p.get('rssi_max'),
@@ -32,8 +31,10 @@ function buildParams() {
   const p = new URLSearchParams(location.search);
   if (selectedGateway) p.set('gw', selectedGateway); else p.delete('gw');
   if (selectedHours !== 24) p.set('hours', selectedHours); else p.delete('hours');
-  if (!filter.showOwned)   p.set('owned',   '0'); else p.delete('owned');
-  if (!filter.showForeign) p.set('foreign', '0'); else p.delete('foreign');
+  if (filter.mode !== 'all') p.set('mode', filter.mode); else p.delete('mode');
+  // Remove old toggle params
+  p.delete('owned');
+  p.delete('foreign');
   const rssiLo = parseInt(document.getElementById('rssi-min')?.value, 10);
   const rssiHi = parseInt(document.getElementById('rssi-max')?.value, 10);
   if (rssiLo > -140) p.set('rssi_min', rssiLo); else p.delete('rssi_min');
@@ -73,8 +74,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const { rssiMin: initRssiMin, rssiMax: initRssiMax, deviceSearch: initDeviceSearch } = readUrlState();
 
   // Apply URL state to UI before loading data
-  document.getElementById('toggle-owned').classList.toggle('active', filter.showOwned);
-  document.getElementById('toggle-foreign').classList.toggle('active', filter.showForeign);
+  document.getElementById('device-filter-mode').value = filter.mode;
 
   // Apply time range to UI
   document.querySelectorAll('.time-btn').forEach(btn => {
@@ -99,35 +99,58 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Filter toggles
-  document.getElementById('toggle-owned').addEventListener('click', (e) => {
-    filter.showOwned = !filter.showOwned;
-    e.target.classList.toggle('active', filter.showOwned);
-    pushUrlState();
-    loadAllData();
-  });
-
-  document.getElementById('toggle-foreign').addEventListener('click', (e) => {
-    filter.showForeign = !filter.showForeign;
-    e.target.classList.toggle('active', filter.showForeign);
+  // Device filter mode dropdown
+  document.getElementById('device-filter-mode').addEventListener('change', (e) => {
+    filter.mode = e.target.value;
     pushUrlState();
     loadAllData();
   });
 
   // Header search (gateway group filtering + cross-page search param)
   const headerSearchEl = document.getElementById('search-input');
+  const searchClearEl = document.getElementById('search-clear');
   const initHeaderSearch = new URLSearchParams(location.search).get('search') || '';
   if (initHeaderSearch) headerSearchEl.value = initHeaderSearch;
+
+  function updateSearchClear() {
+    searchClearEl.classList.toggle('hidden', !headerSearchEl.value);
+  }
+  updateSearchClear();
+
   headerSearchEl.addEventListener('input', () => {
+    updateSearchClear();
+    renderGatewayTabs();
+    pushUrlState();
+  });
+
+  searchClearEl.addEventListener('click', () => {
+    headerSearchEl.value = '';
+    updateSearchClear();
     renderGatewayTabs();
     pushUrlState();
   });
 
   // Device list search
   const deviceSearchEl = document.getElementById('device-search');
+  const deviceSearchClearEl = document.getElementById('device-search-clear');
   if (initDeviceSearch) { deviceSearchEl.value = initDeviceSearch; deviceSearchText = initDeviceSearch.toLowerCase(); }
+
+  function updateDeviceSearchClear() {
+    deviceSearchClearEl.classList.toggle('hidden', !deviceSearchEl.value);
+  }
+  updateDeviceSearchClear();
+
   deviceSearchEl.addEventListener('input', (e) => {
     deviceSearchText = e.target.value.toLowerCase();
+    updateDeviceSearchClear();
+    pushUrlState();
+    loadDeviceBreakdown();
+  });
+
+  deviceSearchClearEl.addEventListener('click', () => {
+    deviceSearchEl.value = '';
+    deviceSearchText = '';
+    updateDeviceSearchClear();
     pushUrlState();
     loadDeviceBreakdown();
   });
@@ -187,20 +210,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('reset-filters').addEventListener('click', () => {
     selectedGateway = null;
     selectedHours = 24;
-    filter.showOwned = true;
-    filter.showForeign = true;
+    filter.mode = 'all';
     deviceSearchText = '';
     selectedGroup = null;
     document.getElementById('device-search').value = '';
     document.getElementById('search-input').value = '';
     document.getElementById('group-filter').value = '';
+    document.getElementById('device-filter-mode').value = 'all';
     document.getElementById('rssi-min').value = -140;
     document.getElementById('rssi-max').value = -30;
     rssiFilterMin = -200;
     rssiFilterMax = 0;
     updateRssiLabel();
-    document.getElementById('toggle-owned').classList.add('active');
-    document.getElementById('toggle-foreign').classList.add('active');
     document.querySelectorAll('.time-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.hours, 10) === 24));
     selectGateway(null);
     pushUrlState();
@@ -246,15 +267,14 @@ function getOperatorColor(operator) {
 
 // Get filter mode and prefixes for API calls
 function getFilterParams() {
-  if (filter.showOwned && filter.showForeign) {
-    return { filter_mode: 'all' };
-  } else if (filter.showOwned && !filter.showForeign) {
+  if (filter.mode === 'chirpstack') {
+    return { source: 'chirpstack' };
+  } else if (filter.mode === 'owned') {
     return { filter_mode: 'owned', prefixes: filter.prefixes.join(',') };
-  } else if (!filter.showOwned && filter.showForeign) {
+  } else if (filter.mode === 'foreign') {
     return { filter_mode: 'foreign', prefixes: filter.prefixes.join(',') };
   }
-  // Neither selected - show nothing (use impossible filter)
-  return { filter_mode: 'owned', prefixes: 'FFFFFFFF/32' };
+  return { filter_mode: 'all' };
 }
 
 function isMyDevice(devAddr) {
@@ -273,29 +293,33 @@ function isMyDevice(devAddr) {
 
 // Gateway Management
 async function loadGateways() {
-  const data = await api('/api/gateways');
-  gateways = data.gateways || [];
+  const [gwData, csData] = await Promise.all([
+    api('/api/gateways'),
+    filter.mode === 'chirpstack'
+      ? api(`/api/cs-gateway-ids?hours=${selectedHours}`)
+      : Promise.resolve(null),
+  ]);
+  gateways = gwData.gateways || [];
+  csGatewayStats = csData
+    ? new Map((csData.gateways || []).map(g => [g.gateway_id, g.packet_count]))
+    : null;
   renderGatewayTabs();
   updateGatewayInfoPanel();
-
-  // Update map based on selection
-  if (!selectedGateway) {
-    updateGatewayMap(getVisibleGateways());
-  } else {
-    const selected = gateways.find(g => g.gateway_id === selectedGateway);
-    updateGatewayMap(selected ? [selected] : []);
-  }
+  updateGatewayMap(selectedGateway
+    ? (gateways.find(g => g.gateway_id === selectedGateway) ? [gateways.find(g => g.gateway_id === selectedGateway)] : [])
+    : getVisibleGateways());
 }
 
 function renderGatewayTabs() {
-  buildGatewayTabs(gateways, selectedGateway, 'search-input', selectedGroup);
+  buildGatewayTabs(getFilteredGateways(), selectedGateway, 'search-input', selectedGroup);
 }
 
 function getVisibleGateways() {
-  if (!selectedGroup) return gateways;
+  const base = getFilteredGateways();
+  if (!selectedGroup) return base;
   const noGroup = gw => !gw.group_name || gw.group_name.trim() === '';
-  if (selectedGroup === '__none__') return gateways.filter(noGroup);
-  return gateways.filter(gw => gw.group_name === selectedGroup);
+  if (selectedGroup === '__none__') return base.filter(noGroup);
+  return base.filter(gw => gw.group_name === selectedGroup);
 }
 
 function updateGatewayInfoPanel() {
@@ -335,13 +359,27 @@ function selectGateway(gatewayId) {
 
 // Load All Data
 function loadAllData() {
+  // Refresh gateway filter whenever mode or hours change
+  refreshCsGatewayIds();
   loadStats();
   loadTrafficChart();
   loadOperatorChart();
-  loadDeviceBreakdown();
+  if (filter.mode === 'chirpstack') {
+    loadCsDeviceBreakdown();
+  } else {
+    loadDeviceBreakdown();
+  }
   loadChannelChart();
   loadSFChart();
   loadRecentJoins();
+}
+
+function refreshCsGatewayIds() {
+  return _refreshCsGatewayIds(filtered => {
+    renderGatewayTabs();
+    const selected = gateways.find(g => g.gateway_id === selectedGateway);
+    updateGatewayMap(selectedGateway ? (selected ? [selected] : []) : getVisibleGateways());
+  });
 }
 
 // Stats
@@ -374,10 +412,11 @@ async function loadStats() {
     const txClass = txPercent >= 1 ? 'duty-high' : txPercent >= 0.5 ? 'duty-medium' : 'duty-low';
     document.getElementById('stat-tx-duty').innerHTML = `<span class="${txClass}">${formatPercent(txPercent)}</span>`;
 
-    // Load downlink stats
+    // Downlink stats — in CS mode, scope to CS devices via dev_addr
     const dlParams = new URLSearchParams({ hours: selectedHours });
     if (selectedGateway) dlParams.set('gateway_id', selectedGateway);
     else if (selectedGroup) dlParams.set('group_name', selectedGroup);
+    if (filter.mode === 'chirpstack') dlParams.set('source', 'chirpstack');
     const dlData = await api(`/api/stats/downlinks?${dlParams}`);
     const dlStats = dlData.stats || {};
 
@@ -616,10 +655,11 @@ async function loadDeviceBreakdown() {
 
     // Filter devices by visibility
     devices = devices.filter(d => {
+      if (filter.mode === 'all') return true;
       const isOwned = isMyDevice(d.dev_addr);
-      if (isOwned && filter.showOwned) return true;
-      if (!isOwned && filter.showForeign) return true;
-      return false;
+      if (filter.mode === 'owned') return isOwned;
+      if (filter.mode === 'foreign') return !isOwned;
+      return true;
     });
 
     // Filter by search text
@@ -756,6 +796,79 @@ async function loadDeviceBreakdown() {
     deviceListContainer.innerHTML = '<div class="text-red-500 text-sm">Failed to load</div>';
     operatorContainer.innerHTML = '<div class="text-red-500 text-sm">Failed to load</div>';
     summaryContainer.innerHTML = '<div class="text-red-500 text-sm">Failed to load</div>';
+  }
+}
+
+// ChirpStack device breakdown
+async function loadCsDeviceBreakdown() {
+  const deviceListContainer = document.getElementById('device-list');
+  const operatorContainer = document.getElementById('breakdown-operator');
+
+  const params = new URLSearchParams({ hours: selectedHours });
+  if (selectedGateway) params.set('gateway_id', selectedGateway);
+
+  try {
+    const data = await api(`/api/cs-devices?${params}`);
+    let devices = data.devices || [];
+
+    // Filter by search text
+    if (deviceSearchText) {
+      devices = devices.filter(d => {
+        const searchable = [d.dev_eui, d.device_name, d.application_name, d.application_id].filter(Boolean).join(' ').toLowerCase();
+        return searchable.includes(deviceSearchText);
+      });
+    }
+
+    if (devices.length === 0) {
+      deviceListContainer.innerHTML = '<div class="text-gray-500 text-sm text-center py-4">No ChirpStack devices found. Publish to <code>application/+/device/+/event/up</code> to see data here.</div>';
+    } else {
+      deviceListContainer.innerHTML = devices.map(d => {
+        const lastSeen = formatLastSeen(d.last_seen);
+        return `
+          <div class="device-detail-item mine" onclick="window.location.href='device.html?' + new URLSearchParams({...Object.fromEntries(new URLSearchParams(location.search)), eui: '${d.dev_eui}'}).toString()">
+            <div class="device-detail-main">
+              <span class="device-addr text-green-400">${d.device_name || d.dev_eui}</span>
+              <span class="device-operator text-white/50">${d.dev_eui}</span>
+              <span class="device-packets">${formatNumber(d.packet_count)} pkts</span>
+            </div>
+            <div class="device-detail-stats">
+              <span class="text-white/40 text-xs">${d.application_name || d.application_id}</span>
+              <span class="device-lastseen">${lastSeen}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // By Application breakdown
+    const appGroups = {};
+    for (const d of devices) {
+      const key = d.application_name || d.application_id;
+      if (!appGroups[key]) appGroups[key] = { count: 0, packets: 0 };
+      appGroups[key].count++;
+      appGroups[key].packets += d.packet_count;
+    }
+    const totalDevices = devices.length;
+    operatorContainer.innerHTML = Object.entries(appGroups).sort((a, b) => b[1].packets - a[1].packets).map(([name, stats]) => {
+      const pct = totalDevices > 0 ? ((stats.count / totalDevices) * 100).toFixed(0) : 0;
+      return `
+        <div class="breakdown-row">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-sm font-medium text-green-400">${name}</span>
+            <span class="text-xs text-gray-400">${stats.count} dev</span>
+          </div>
+          <div class="breakdown-bar">
+            <div class="breakdown-bar-fill" style="width: ${pct}%; background: #22c55e"></div>
+          </div>
+          <div class="text-xs text-gray-500 mt-1">${formatNumber(stats.packets)} pkts</div>
+        </div>
+      `;
+    }).join('') || '<div class="text-gray-500 text-sm text-center py-4">No data</div>';
+
+  } catch (e) {
+    console.error('CS device breakdown error:', e);
+    deviceListContainer.innerHTML = '<div class="text-red-500 text-sm">Failed to load</div>';
+    operatorContainer.innerHTML = '<div class="text-red-500 text-sm">Failed to load</div>';
   }
 }
 

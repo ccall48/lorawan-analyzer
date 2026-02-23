@@ -23,12 +23,13 @@
             <a href="./" class="nav-link active px-3 py-1 rounded text-sm">Dashboard</a>
             <a href="live.html" class="nav-link px-3 py-1 rounded text-sm">Live Stream</a>
           </nav>
-          <div class="border-l border-white/20 h-4"></div>
-          <input type="text" id="search-input" placeholder="Search..." class="bg-white/10 border border-white/20 rounded px-2 py-1 text-xs text-white placeholder-white/40 w-28 focus:outline-none focus:border-white/40">
-          <select id="group-filter" class="bg-white/10 border border-white/20 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-white/40 max-w-24">
+          <div class="search-wrap">
+            <input type="text" id="search-input" placeholder="Search..." class="px-2 py-1 text-xs w-28">
+            <button id="search-clear" class="search-clear hidden" title="Clear search">&times;</button>
+          </div>
+          <select id="group-filter" class="px-2 py-1 text-xs w-24">
             <option value="">All Groups</option>
           </select>
-          <div class="border-l border-white/20 h-4"></div>
           <div class="flex items-center gap-1 text-xs text-white/60">
             <span>RSSI</span>
             <div class="rssi-range-wrap">
@@ -50,8 +51,12 @@
           </div>
           <!-- Device Filter -->
           <div class="flex items-center gap-2">
-            <button id="toggle-owned" class="toggle-btn active px-2 py-1 rounded text-xs">My Devices</button>
-            <button id="toggle-foreign" class="toggle-btn active px-2 py-1 rounded text-xs">Unknown Devices</button>
+            <select id="device-filter-mode" class="px-2 py-1 text-xs w-36">
+              <option value="all">All Devices</option>
+              <option value="owned">Known Devices</option>
+              <option value="foreign">Unknown Devices</option>
+              <option value="chirpstack">ChirpStack Application</option>
+            </select>
             <button id="reset-filters" class="toggle-btn px-2 py-1 rounded text-xs text-white/40 -mr-2" title="Reset all filters">Reset</button>
           </div>
         </div>
@@ -200,7 +205,10 @@
           <div class="panel">
             <div class="flex items-center justify-between mb-2">
               <h3 class="panel-title mb-0">Devices</h3>
-              <input type="text" id="device-search" placeholder="Search..." class="bg-white/10 border border-white/20 rounded px-2 py-1 text-xs text-white placeholder-white/40 w-36 focus:outline-none focus:border-white/40">
+              <div class="search-wrap">
+                <input type="text" id="device-search" placeholder="Search..." class="px-2 py-1 text-xs w-36">
+                <button id="device-search-clear" class="search-clear hidden" title="Clear search">&times;</button>
+              </div>
             </div>
             <div id="device-list" class="space-y-1 max-h-[500px] overflow-y-auto"></div>
           </div>

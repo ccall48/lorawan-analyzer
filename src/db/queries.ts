@@ -1,5 +1,6 @@
 import { getDb } from './index.js';
 import { updateGatewayCache } from '../websocket/live.js';
+import { calculateAirtime } from '../parser/airtime.js';
 import type {
   ParsedPacket,
   GatewayStats,
@@ -16,6 +17,8 @@ import type {
   ChannelStats,
   SFStats,
   JoinEuiGroup,
+  ChirpStackUplinkEvent,
+  CsDevice,
 } from '../types.js';
 
 export type DeviceFilter = {
@@ -1138,6 +1141,71 @@ export async function getDownlinkStats(
   };
 }
 
+// Downlink/ACK stats scoped to CS devices.
+// Downlinks are matched by dev_addr; tx_acks have no dev_addr so they are matched
+// by joining on f_cnt (DL_ID) to their corresponding downlink row.
+export async function getCsDownlinkStats(
+  gatewayId: string | null,
+  hours: number = 24
+): Promise<DownlinkStats> {
+  const sql = getDb();
+  const gwFilter = gatewayId && gatewayId !== 'all'
+    ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'`
+    : '';
+
+  const csDevAddrSubquery = `
+    SELECT dev_addr FROM cs_devices
+    WHERE last_seen > NOW() - make_interval(hours => ${hours})
+      AND dev_addr IS NOT NULL
+  `;
+
+  const rows = await sql.unsafe(`
+    SELECT
+      -- Downlinks: matched directly by dev_addr
+      (SELECT COUNT(*) FROM packets
+        WHERE packet_type = 'downlink'
+          AND timestamp > NOW() - make_interval(hours => ${hours})
+          ${gwFilter}
+          AND dev_addr IN (${csDevAddrSubquery})
+      ) AS downlinks,
+      -- TX ACK OK: f_port=1, joined to a downlink for a CS device via DL_ID (f_cnt)
+      (SELECT COUNT(*) FROM packets ack
+        WHERE ack.packet_type = 'tx_ack'
+          AND ack.timestamp > NOW() - make_interval(hours => ${hours})
+          ${gwFilter}
+          AND ack.f_port = 1
+          AND ack.f_cnt IN (
+            SELECT f_cnt FROM packets dl
+            WHERE dl.packet_type = 'downlink'
+              AND dl.timestamp > NOW() - make_interval(hours => ${hours})
+              AND dl.dev_addr IN (${csDevAddrSubquery})
+          )
+      ) AS tx_ack_ok,
+      -- TX ACK Fail: not f_port 0 or 1
+      (SELECT COUNT(*) FROM packets ack
+        WHERE ack.packet_type = 'tx_ack'
+          AND ack.timestamp > NOW() - make_interval(hours => ${hours})
+          ${gwFilter}
+          AND ack.f_port NOT IN (0, 1)
+          AND ack.f_cnt IN (
+            SELECT f_cnt FROM packets dl
+            WHERE dl.packet_type = 'downlink'
+              AND dl.timestamp > NOW() - make_interval(hours => ${hours})
+              AND dl.dev_addr IN (${csDevAddrSubquery})
+          )
+      ) AS tx_ack_failed
+  `) as Array<Record<string, unknown>>;
+
+  const r = rows[0] ?? { downlinks: '0', tx_ack_ok: '0', tx_ack_failed: '0' };
+  return {
+    downlinks: Number(r.downlinks),
+    tx_ack_ok: Number(r.tx_ack_ok),
+    tx_ack_failed: Number(r.tx_ack_failed),
+    tx_ack_duty_cycle: 0,
+  };
+}
+
+
 export async function getChannelDistribution(
   gatewayId: string,
   hours: number = 24,
@@ -1649,4 +1717,762 @@ export async function getRecentPackets(
       gateway_name: gw?.name ?? null,
     };
   });
+}
+
+// ============================================
+// ChirpStack Application Packet Insert (batched)
+// ============================================
+
+type CsPacketRow = {
+  timestamp: Date;
+  dev_eui: string;
+  dev_addr: string | null;
+  device_name: string;
+  application_id: string;
+  operator: string;
+  frequency: number;
+  spreading_factor: number | null;
+  bandwidth: number;
+  rssi: number;
+  snr: number;
+  payload_size: number;
+  airtime_us: number;
+  f_cnt: number | null;
+  f_port: number | null;
+  confirmed: boolean | null;
+};
+
+let csPacketBuffer: CsPacketRow[] = [];
+let csFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function flushCsPacketBuffer(): Promise<void> {
+  if (csFlushTimer) {
+    clearTimeout(csFlushTimer);
+    csFlushTimer = null;
+  }
+  if (csPacketBuffer.length === 0) return;
+
+  const batch = csPacketBuffer;
+  csPacketBuffer = [];
+
+  const sql = getDb();
+  try {
+    await sql`INSERT INTO cs_packets ${sql(batch)}`;
+  } catch (err) {
+    console.error(`Failed to flush ${batch.length} CS packets to Postgres:`, err);
+    csPacketBuffer = [...batch, ...csPacketBuffer];
+  }
+}
+
+function scheduleCsFlush(): void {
+  if (!csFlushTimer) {
+    csFlushTimer = setTimeout(() => {
+      csFlushTimer = null;
+      flushCsPacketBuffer().catch(err => console.error('CS packet buffer flush error:', err));
+    }, FLUSH_INTERVAL_MS);
+  }
+}
+
+export async function flushCsPackets(): Promise<void> {
+  await flushCsPacketBuffer();
+}
+
+export async function insertCsPacket(event: ChirpStackUplinkEvent): Promise<void> {
+  const airtime_us = event.spreadingFactor && event.bandwidth
+    ? calculateAirtime({ spreadingFactor: event.spreadingFactor, bandwidth: event.bandwidth, payloadSize: event.payloadSize })
+    : 0;
+
+  csPacketBuffer.push({
+    timestamp: event.timestamp,
+    dev_eui: event.devEui,
+    dev_addr: event.devAddr,
+    device_name: event.deviceName,
+    application_id: event.applicationId,
+    operator: event.applicationName ?? event.applicationId,
+    frequency: event.frequency,
+    spreading_factor: event.spreadingFactor,
+    bandwidth: event.bandwidth,
+    rssi: event.rssi,
+    snr: event.snr,
+    payload_size: event.payloadSize,
+    airtime_us,
+    f_cnt: event.fCnt,
+    f_port: event.fPort,
+    confirmed: event.confirmed,
+  });
+
+  if (csPacketBuffer.length >= BATCH_SIZE) {
+    await flushCsPacketBuffer();
+  } else {
+    scheduleCsFlush();
+  }
+}
+
+export async function upsertCsDevice(event: ChirpStackUplinkEvent): Promise<void> {
+  const sql = getDb();
+  await sql`
+    INSERT INTO cs_devices (dev_eui, dev_addr, device_name, application_id, application_name, last_seen, packet_count)
+    VALUES (${event.devEui}, ${event.devAddr ?? null}, ${event.deviceName}, ${event.applicationId}, ${event.applicationName ?? null}, ${event.timestamp}, 1)
+    ON CONFLICT (dev_eui) DO UPDATE SET
+      dev_addr         = EXCLUDED.dev_addr,
+      device_name      = EXCLUDED.device_name,
+      application_id   = EXCLUDED.application_id,
+      application_name = EXCLUDED.application_name,
+      last_seen        = EXCLUDED.last_seen,
+      packet_count     = cs_devices.packet_count + 1
+  `;
+}
+
+// ============================================
+// ChirpStack Query Functions
+// ============================================
+
+// Returns gateway stats for gateways that have seen CS devices, with CS packet counts
+export async function getCsGatewayStats(hours: number = 24): Promise<Array<{ gateway_id: string; packet_count: number }>> {
+  const sql = getDb();
+  const rows = await sql.unsafe(`
+    SELECT p.gateway_id, COUNT(*) AS packet_count
+    FROM packets p
+    WHERE p.timestamp > NOW() - make_interval(hours => ${hours})
+      AND p.dev_addr IN (
+        SELECT dev_addr FROM cs_devices
+        WHERE last_seen > NOW() - make_interval(hours => ${hours})
+          AND dev_addr IS NOT NULL
+      )
+    GROUP BY p.gateway_id
+  `) as Array<{ gateway_id: string; packet_count: string }>;
+  return rows.map(r => ({ gateway_id: r.gateway_id, packet_count: Number(r.packet_count) }));
+}
+
+export async function getCsDevices(
+  hours: number = 24,
+  gatewayId?: string | null
+): Promise<CsDevice[]> {
+  const sql = getDb();
+
+  // When gatewayId is given, filter by devices whose devAddr appears in that gateway's recent packets
+  const gwFilterSql = (gatewayId && gatewayId !== 'all')
+    ? `AND d.dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp > NOW() - make_interval(hours => ${hours}))`
+    : '';
+
+  const rows = await sql.unsafe(`
+    SELECT
+      d.dev_eui,
+      d.dev_addr,
+      d.device_name,
+      d.application_id,
+      d.application_name,
+      d.last_seen,
+      d.packet_count
+    FROM cs_devices d
+    WHERE d.last_seen > NOW() - make_interval(hours => ${hours})
+    ${gwFilterSql}
+    ORDER BY d.last_seen DESC
+  `) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    dev_eui: r.dev_eui as string,
+    dev_addr: r.dev_addr as string | null,
+    device_name: r.device_name as string,
+    application_id: r.application_id as string,
+    application_name: r.application_name as string | null,
+    last_seen: r.last_seen instanceof Date ? r.last_seen.toISOString() : String(r.last_seen),
+    packet_count: Number(r.packet_count),
+  }));
+}
+
+export async function getCsDeviceByEui(devEui: string): Promise<CsDevice | null> {
+  const sql = getDb();
+  const rows = await sql<Array<{
+    dev_eui: string;
+    dev_addr: string | null;
+    device_name: string;
+    application_id: string;
+    application_name: string | null;
+    last_seen: Date;
+    packet_count: string;
+  }>>`
+    SELECT dev_eui, dev_addr, device_name, application_id, application_name, last_seen, packet_count
+    FROM cs_devices WHERE dev_eui = ${devEui.toUpperCase()}
+  `;
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    dev_eui: r.dev_eui,
+    dev_addr: r.dev_addr,
+    device_name: r.device_name,
+    application_id: r.application_id,
+    application_name: r.application_name,
+    last_seen: r.last_seen.toISOString(),
+    packet_count: Number(r.packet_count),
+  };
+}
+
+export async function getCsSummaryStats(
+  hours: number = 24,
+  gatewayId?: string | null
+): Promise<{ total_packets: number; unique_devices: number; total_airtime_ms: number }> {
+  const sql = getDb();
+
+  const gwFilter = (gatewayId && gatewayId !== 'all')
+    ? `AND dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp > NOW() - make_interval(hours => ${hours}))`
+    : '';
+
+  const rows = await sql.unsafe(`
+    SELECT
+      COUNT(*) AS total_packets,
+      COUNT(DISTINCT dev_eui) AS unique_devices,
+      SUM(airtime_us) / 1000 AS total_airtime_ms
+    FROM cs_packets
+    WHERE timestamp > NOW() - make_interval(hours => ${hours})
+    ${gwFilter}
+  `) as Array<Record<string, unknown>>;
+
+  const r = rows[0];
+  return {
+    total_packets: Number(r?.total_packets ?? 0),
+    unique_devices: Number(r?.unique_devices ?? 0),
+    total_airtime_ms: Number(r?.total_airtime_ms ?? 0),
+  };
+}
+
+export async function getCsOperatorStats(
+  hours: number = 24,
+  gatewayId?: string | null
+): Promise<OperatorStats[]> {
+  const sql = getDb();
+
+  const gwFilter = (gatewayId && gatewayId !== 'all')
+    ? `AND dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp > NOW() - make_interval(hours => ${hours}))`
+    : '';
+
+  const rows = await sql.unsafe(`
+    SELECT
+      operator,
+      COUNT(*) AS packet_count,
+      COUNT(DISTINCT dev_eui) AS unique_devices,
+      SUM(airtime_us) / 1000 AS total_airtime_ms
+    FROM cs_packets
+    WHERE timestamp > NOW() - make_interval(hours => ${hours})
+    ${gwFilter}
+    GROUP BY operator
+    ORDER BY packet_count DESC
+  `) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    operator: r.operator as string,
+    packet_count: Number(r.packet_count),
+    unique_devices: Number(r.unique_devices),
+    total_airtime_ms: Number(r.total_airtime_ms),
+  }));
+}
+
+export async function getCsTimeSeries(options: {
+  from?: Date;
+  to?: Date;
+  interval?: string;
+  metric?: 'packets' | 'airtime';
+  gatewayId?: string | null;
+}): Promise<TimeSeriesPoint[]> {
+  const sql = getDb();
+
+  const {
+    from = new Date(Date.now() - 24 * 60 * 60 * 1000),
+    to = new Date(),
+    interval = '1h',
+    metric = 'packets',
+    gatewayId,
+  } = options;
+
+  const intervalMap: Record<string, string> = {
+    '5m': '5 minutes',
+    '15m': '15 minutes',
+    '1h': '1 hour',
+    '1d': '1 day',
+  };
+  const bucketInterval = intervalMap[interval] ?? '1 hour';
+
+  const metricExpr = metric === 'airtime' ? 'SUM(airtime_us) / 1000000.0' : 'COUNT(*)';
+
+  const gwFilter = (gatewayId && gatewayId !== 'all')
+    ? `AND dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp BETWEEN $1::timestamptz AND $2::timestamptz)`
+    : '';
+
+  const rows = await sql.unsafe(`
+    SELECT
+      time_bucket('${bucketInterval}', timestamp) AS ts,
+      operator AS group_name,
+      ${metricExpr} AS value
+    FROM cs_packets
+    WHERE timestamp >= $1::timestamptz
+      AND timestamp <= $2::timestamptz
+    ${gwFilter}
+    GROUP BY ts, operator
+    ORDER BY ts, operator
+  `, [from, to]);
+
+  return (rows as Array<Record<string, unknown>>).map(row => ({
+    timestamp: row.ts instanceof Date ? row.ts : new Date(row.ts as string),
+    value: Number(row.value),
+    group: row.group_name as string | undefined,
+  }));
+}
+
+export async function getCsDutyCycleStats(
+  hours: number = 1,
+  gatewayId?: string | null
+): Promise<SpectrumStats> {
+  const sql = getDb();
+  const windowUs = hours * 3600 * 1_000_000;
+
+  const csDevAddrSubquery = `
+    SELECT dev_addr FROM cs_devices
+    WHERE last_seen > NOW() - make_interval(hours => ${hours})
+      AND dev_addr IS NOT NULL
+  `;
+
+  const gwFilter = (gatewayId && gatewayId !== 'all')
+    ? `AND dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp > NOW() - make_interval(hours => ${hours}))`
+    : '';
+
+  const [rxRows, txRows] = await Promise.all([
+    sql.unsafe(`
+      SELECT
+        SUM(airtime_us) AS rx_airtime_us,
+        SUM(airtime_us)::float / ${windowUs} * 100 AS rx_airtime_percent
+      FROM cs_packets
+      WHERE timestamp > NOW() - make_interval(hours => ${hours})
+      ${gwFilter}
+    `),
+    sql.unsafe(`
+      SELECT
+        SUM(airtime_us) AS tx_airtime_us,
+        SUM(airtime_us)::float / ${windowUs} * 100 AS tx_duty_cycle_percent
+      FROM packets
+      WHERE packet_type = 'downlink'
+        AND timestamp > NOW() - make_interval(hours => ${hours})
+        AND dev_addr IN (${csDevAddrSubquery})
+        ${gatewayId && gatewayId !== 'all' ? `AND gateway_id = '${gatewayId.replace(/'/g, "''")}'` : ''}
+    `),
+  ]) as [Array<Record<string, unknown>>, Array<Record<string, unknown>>];
+
+  const rx = rxRows[0];
+  const tx = txRows[0];
+  return {
+    rx_airtime_us: Number(rx?.rx_airtime_us ?? 0),
+    rx_airtime_percent: Number(rx?.rx_airtime_percent ?? 0),
+    tx_airtime_us: Number(tx?.tx_airtime_us ?? 0),
+    tx_duty_cycle_percent: Number(tx?.tx_duty_cycle_percent ?? 0),
+  };
+}
+
+export async function getCsChannelDistribution(
+  hours: number = 24,
+  gatewayId?: string | null
+): Promise<ChannelStats[]> {
+  const sql = getDb();
+
+  const gwFilter = (gatewayId && gatewayId !== 'all')
+    ? `AND dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp > NOW() - make_interval(hours => ${hours}))`
+    : '';
+
+  const rows = await sql.unsafe(`
+    SELECT
+      frequency,
+      COUNT(*) AS packet_count,
+      SUM(airtime_us) AS airtime_us,
+      SUM(airtime_us)::float / NULLIF(SUM(SUM(airtime_us)) OVER (), 0) * 100 AS usage_percent
+    FROM cs_packets
+    WHERE timestamp > NOW() - make_interval(hours => ${hours})
+    ${gwFilter}
+    GROUP BY frequency
+    ORDER BY frequency
+  `) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    frequency: Number(r.frequency),
+    packet_count: Number(r.packet_count),
+    airtime_us: Number(r.airtime_us),
+    usage_percent: Number(r.usage_percent ?? 0),
+  }));
+}
+
+export async function getCsSFDistribution(
+  hours: number = 24,
+  gatewayId?: string | null
+): Promise<SFStats[]> {
+  const sql = getDb();
+
+  const gwFilter = (gatewayId && gatewayId !== 'all')
+    ? `AND dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp > NOW() - make_interval(hours => ${hours}))`
+    : '';
+
+  const rows = await sql.unsafe(`
+    SELECT
+      spreading_factor,
+      COUNT(*) AS packet_count,
+      SUM(airtime_us) AS airtime_us,
+      SUM(airtime_us)::float / NULLIF(SUM(SUM(airtime_us)) OVER (), 0) * 100 AS usage_percent
+    FROM cs_packets
+    WHERE spreading_factor IS NOT NULL
+      AND timestamp > NOW() - make_interval(hours => ${hours})
+    ${gwFilter}
+    GROUP BY spreading_factor
+    ORDER BY spreading_factor
+  `) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    spreading_factor: Number(r.spreading_factor),
+    packet_count: Number(r.packet_count),
+    airtime_us: Number(r.airtime_us),
+    usage_percent: Number(r.usage_percent ?? 0),
+  }));
+}
+
+export async function getCsRecentPackets(
+  limit: number = 100,
+  gatewayId?: string | null
+): Promise<Array<{
+  timestamp: string;
+  dev_eui: string;
+  dev_addr: string | null;
+  device_name: string;
+  application_id: string;
+  operator: string;
+  frequency: number;
+  spreading_factor: number | null;
+  bandwidth: number;
+  rssi: number;
+  snr: number;
+  payload_size: number;
+  f_cnt: number | null;
+  f_port: number | null;
+  confirmed: boolean | null;
+  airtime_us: number;
+}>> {
+  const sql = getDb();
+
+  const gwFilter = (gatewayId && gatewayId !== 'all')
+    ? `AND dev_addr IN (SELECT DISTINCT dev_addr FROM packets WHERE gateway_id = '${gatewayId.replace(/'/g, "''")}' AND timestamp > NOW() - INTERVAL '24 hours')`
+    : '';
+
+  const rows = await sql.unsafe(`
+    SELECT
+      timestamp, dev_eui, dev_addr, device_name, application_id, operator,
+      frequency, spreading_factor, bandwidth, rssi, snr, payload_size,
+      f_cnt, f_port, confirmed, airtime_us
+    FROM cs_packets
+    WHERE 1=1
+    ${gwFilter}
+    ORDER BY timestamp DESC
+    LIMIT ${limit}
+  `) as Array<Record<string, unknown>>;
+
+  return rows.map(r => ({
+    timestamp: r.timestamp instanceof Date ? r.timestamp.toISOString() : String(r.timestamp),
+    dev_eui: r.dev_eui as string,
+    dev_addr: r.dev_addr as string | null,
+    device_name: r.device_name as string,
+    application_id: r.application_id as string,
+    operator: r.operator as string,
+    frequency: Number(r.frequency),
+    spreading_factor: r.spreading_factor != null ? Number(r.spreading_factor) : null,
+    bandwidth: Number(r.bandwidth),
+    rssi: Number(r.rssi),
+    snr: Number(r.snr),
+    payload_size: Number(r.payload_size),
+    f_cnt: r.f_cnt != null ? Number(r.f_cnt) : null,
+    f_port: r.f_port != null ? Number(r.f_port) : null,
+    confirmed: r.confirmed as boolean | null,
+    airtime_us: Number(r.airtime_us),
+  }));
+}
+
+export async function getCsDeviceActivity(
+  devEui: string,
+  hours: number = 24
+): Promise<Array<{
+  timestamp: string;
+  f_cnt: number | null;
+  f_port: number | null;
+  rssi: number;
+  snr: number;
+  spreading_factor: number | null;
+  frequency: number;
+  payload_size: number;
+  airtime_us: number;
+}>> {
+  const sql = getDb();
+
+  const rows = await sql<Array<{
+    timestamp: Date;
+    f_cnt: number | null;
+    f_port: number | null;
+    rssi: number;
+    snr: number;
+    spreading_factor: number | null;
+    frequency: string;
+    payload_size: number;
+    airtime_us: number;
+  }>>`
+    SELECT timestamp, f_cnt, f_port, rssi, snr, spreading_factor, frequency, payload_size, airtime_us
+    FROM cs_packets
+    WHERE dev_eui = ${devEui.toUpperCase()}
+      AND timestamp > NOW() - make_interval(hours => ${hours})
+    ORDER BY timestamp DESC
+    LIMIT 1000
+  `;
+
+  return rows.map(r => ({
+    ...r,
+    timestamp: r.timestamp.toISOString(),
+    frequency: Number(r.frequency),
+  }));
+}
+
+export async function getCsDeviceProfile(
+  devEui: string,
+  hours: number = 24
+): Promise<{ dev_eui: string; device_name: string; application_id: string; application_name: string | null; first_seen: string; last_seen: string; packet_count: number; total_airtime_ms: number; avg_rssi: number; avg_snr: number } | null> {
+  const sql = getDb();
+
+  const rows = await sql<Array<{
+    dev_eui: string;
+    device_name: string;
+    application_id: string;
+    application_name: string | null;
+    first_seen: Date;
+    last_seen: Date;
+    packet_count: string;
+    total_airtime_ms: string;
+    avg_rssi: string;
+    avg_snr: string;
+  }>>`
+    SELECT
+      p.dev_eui,
+      MIN(p.device_name) AS device_name,
+      MIN(p.application_id) AS application_id,
+      d.application_name,
+      MIN(p.timestamp) AS first_seen,
+      MAX(p.timestamp) AS last_seen,
+      COUNT(*) AS packet_count,
+      SUM(p.airtime_us) / 1000 AS total_airtime_ms,
+      AVG(p.rssi) AS avg_rssi,
+      AVG(p.snr) AS avg_snr
+    FROM cs_packets p
+    LEFT JOIN cs_devices d ON p.dev_eui = d.dev_eui
+    WHERE p.dev_eui = ${devEui.toUpperCase()}
+      AND p.timestamp > NOW() - make_interval(hours => ${hours})
+    GROUP BY p.dev_eui, d.application_name
+  `;
+
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    dev_eui: r.dev_eui,
+    device_name: r.device_name,
+    application_id: r.application_id,
+    application_name: r.application_name,
+    first_seen: r.first_seen.toISOString(),
+    last_seen: r.last_seen.toISOString(),
+    packet_count: Number(r.packet_count),
+    total_airtime_ms: Number(r.total_airtime_ms),
+    avg_rssi: Number(r.avg_rssi),
+    avg_snr: Number(r.avg_snr),
+  };
+}
+
+export async function getCsDeviceSignalTrends(
+  devEui: string,
+  hours: number = 24
+): Promise<SignalTrendPoint[]> {
+  const sql = getDb();
+
+  const rows = await sql<Array<{
+    timestamp: Date;
+    avg_rssi: number;
+    avg_snr: number;
+    packet_count: number;
+  }>>`
+    SELECT timestamp, rssi AS avg_rssi, snr AS avg_snr, 1 AS packet_count
+    FROM cs_packets
+    WHERE dev_eui = ${devEui.toUpperCase()}
+      AND timestamp > NOW() - make_interval(hours => ${hours})
+    ORDER BY timestamp
+    LIMIT 500
+  `;
+
+  return rows.map(r => ({
+    timestamp: r.timestamp.toISOString(),
+    avg_rssi: r.avg_rssi,
+    avg_snr: r.avg_snr,
+    packet_count: r.packet_count,
+  }));
+}
+
+export async function getCsDeviceDistributions(
+  devEui: string,
+  hours: number = 24
+): Promise<{ sf: DistributionItem[]; frequency: DistributionItem[] }> {
+  const sql = getDb();
+
+  const sfRows = await sql<Array<{ key: string; value: string; count: string }>>`
+    SELECT
+      spreading_factor::text AS key,
+      spreading_factor AS value,
+      COUNT(*) AS count
+    FROM cs_packets
+    WHERE dev_eui = ${devEui.toUpperCase()}
+      AND spreading_factor IS NOT NULL
+      AND timestamp > NOW() - make_interval(hours => ${hours})
+    GROUP BY spreading_factor
+    ORDER BY spreading_factor
+  `;
+
+  const freqRows = await sql<Array<{ key: string; value: string; count: string }>>`
+    SELECT
+      frequency::text AS key,
+      frequency AS value,
+      COUNT(*) AS count
+    FROM cs_packets
+    WHERE dev_eui = ${devEui.toUpperCase()}
+      AND timestamp > NOW() - make_interval(hours => ${hours})
+    GROUP BY frequency
+    ORDER BY frequency
+  `;
+
+  return {
+    sf: sfRows.map(r => ({ key: r.key, value: Number(r.value), count: Number(r.count) })),
+    frequency: freqRows.map(r => ({ key: r.key, value: Number(r.value), count: Number(r.count) })),
+  };
+}
+
+export async function getCsDeviceFCntTimeline(
+  devEui: string,
+  hours: number = 24
+): Promise<FCntTimelinePoint[]> {
+  const sql = getDb();
+
+  const rows = await sql<Array<{
+    timestamp: Date;
+    f_cnt: number;
+    gap: boolean;
+  }>>`
+    SELECT
+      timestamp,
+      f_cnt,
+      CASE WHEN f_cnt IS NOT NULL
+        AND LAG(f_cnt) OVER (ORDER BY timestamp) IS NOT NULL
+        AND f_cnt - LAG(f_cnt) OVER (ORDER BY timestamp) > 1
+        THEN TRUE ELSE FALSE
+      END AS gap
+    FROM cs_packets
+    WHERE dev_eui = ${devEui.toUpperCase()}
+      AND f_cnt IS NOT NULL
+      AND timestamp > NOW() - make_interval(hours => ${hours})
+    ORDER BY timestamp
+  `;
+
+  return rows.map(r => ({
+    timestamp: r.timestamp.toISOString(),
+    f_cnt: r.f_cnt,
+    gap: r.gap,
+  }));
+}
+
+export async function getCsDevicePacketIntervals(
+  devEui: string,
+  hours: number = 24
+): Promise<IntervalHistogram[]> {
+  const sql = getDb();
+
+  const rows = await sql<Array<{
+    interval_seconds: string;
+    count: string;
+  }>>`
+    WITH intervals AS (
+      SELECT
+        EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY timestamp)))::bigint AS interval_sec
+      FROM cs_packets
+      WHERE dev_eui = ${devEui.toUpperCase()}
+        AND timestamp > NOW() - make_interval(hours => ${hours})
+    )
+    SELECT
+      (FLOOR(interval_sec / 60) * 60)::bigint AS interval_seconds,
+      COUNT(*) AS count
+    FROM intervals
+    WHERE interval_sec > 0 AND interval_sec < 86400
+    GROUP BY interval_seconds
+    ORDER BY interval_seconds
+  `;
+
+  return rows.map(r => ({
+    interval_seconds: Number(r.interval_seconds),
+    count: Number(r.count),
+  }));
+}
+
+export async function getCsDevicePacketLoss(
+  devEui: string,
+  hours: number = 24
+): Promise<{
+  total_received: number;
+  total_expected: number;
+  total_missed: number;
+  loss_percent: number;
+  per_gateway: Array<{ gateway_id: string; received: number; missed: number; loss_percent: number }>;
+}> {
+  const sql = getDb();
+
+  const rows = await sql<Array<{
+    received: string;
+    missed: string;
+  }>>`
+    WITH ordered AS (
+      SELECT
+        f_cnt,
+        LAG(f_cnt) OVER (ORDER BY timestamp) AS prev_fcnt
+      FROM cs_packets
+      WHERE dev_eui = ${devEui.toUpperCase()}
+        AND f_cnt IS NOT NULL
+        AND timestamp > NOW() - make_interval(hours => ${hours})
+    )
+    SELECT
+      COUNT(*) AS received,
+      SUM(CASE WHEN prev_fcnt IS NOT NULL AND f_cnt > prev_fcnt AND f_cnt - prev_fcnt > 1
+          THEN f_cnt - prev_fcnt - 1 ELSE 0 END) AS missed
+    FROM ordered
+  `;
+
+  const r = rows[0] ?? { received: '0', missed: '0' };
+  const totalReceived = Number(r.received);
+  const totalMissed = Number(r.missed);
+  const totalExpected = totalReceived + totalMissed;
+
+  return {
+    total_received: totalReceived,
+    total_expected: totalExpected,
+    total_missed: totalMissed,
+    loss_percent: totalExpected > 0 ? (totalMissed / totalExpected) * 100 : 0,
+    per_gateway: [],  // CS packets don't have gateway_id
+  };
+}
+
+export async function getCsDevEuis(): Promise<string[]> {
+  const sql = getDb();
+  const rows = await sql<Array<{ dev_eui: string }>>`SELECT dev_eui FROM cs_devices`;
+  return rows.map(r => r.dev_eui);
+}
+
+export async function getCsDevicesForCache(): Promise<Array<{ dev_eui: string; dev_addr: string | null; device_name: string; application_id: string; application_name: string | null }>> {
+  const sql = getDb();
+  return sql<Array<{ dev_eui: string; dev_addr: string | null; device_name: string; application_id: string; application_name: string | null }>>`
+    SELECT dev_eui, dev_addr, device_name, application_id, application_name FROM cs_devices
+  `;
+}
+
+export async function getCsModeAvailable(): Promise<boolean> {
+  const sql = getDb();
+  const rows = await sql<Array<{ count: string }>>`SELECT COUNT(*) AS count FROM cs_devices`;
+  return Number(rows[0]?.count ?? 0) > 0;
 }

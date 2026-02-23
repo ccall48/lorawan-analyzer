@@ -1,5 +1,5 @@
 import mqtt, { MqttClient, IClientOptions } from 'mqtt';
-import type { MqttConfig, ParsedPacket } from '../types.js';
+import type { MqttConfig, ParsedPacket, ChirpStackUplinkEvent, ChirpStackTxAckEvent, ChirpStackAckEvent, ChirpStackDownlinkEvent } from '../types.js';
 import { parseUplinkFrame, parseProtobufUplink, extractGatewayLocationFromJSON, extractGatewayLocationFromProtobuf, extractGatewayLocationsFromJSON } from '../parser/uplink.js';
 import type { GatewayLocation } from '../parser/uplink.js';
 import { parseDownlinkFrame, parseProtobufDownlink } from '../parser/downlink.js';
@@ -7,10 +7,34 @@ import { parseTxAck, parseProtobufTxAck } from '../parser/txack.js';
 
 type PacketHandler = (packet: ParsedPacket, gatewayLocation?: GatewayLocation | null) => void;
 type LocationHandler = (gatewayId: string, location: GatewayLocation) => void;
+type ChirpStackUplinkHandler = (event: ChirpStackUplinkEvent) => void;
+type ChirpStackTxAckHandler = (event: ChirpStackTxAckEvent) => void;
+type ChirpStackAckHandler = (event: ChirpStackAckEvent) => void;
+type ChirpStackDownlinkHandler = (event: ChirpStackDownlinkEvent) => void;
 
 let client: MqttClient | null = null;
 let packetHandlers: PacketHandler[] = [];
 let locationHandlers: LocationHandler[] = [];
+let csUplinkHandlers: ChirpStackUplinkHandler[] = [];
+let csTxAckHandlers: ChirpStackTxAckHandler[] = [];
+let csAckHandlers: ChirpStackAckHandler[] = [];
+let csDownlinkHandlers: ChirpStackDownlinkHandler[] = [];
+
+export function onChirpStackUplink(handler: ChirpStackUplinkHandler): void {
+  csUplinkHandlers.push(handler);
+}
+
+export function onChirpStackTxAck(handler: ChirpStackTxAckHandler): void {
+  csTxAckHandlers.push(handler);
+}
+
+export function onChirpStackAck(handler: ChirpStackAckHandler): void {
+  csAckHandlers.push(handler);
+}
+
+export function onChirpStackDownlink(handler: ChirpStackDownlinkHandler): void {
+  csDownlinkHandlers.push(handler);
+}
 
 export function onPacket(handler: PacketHandler): void {
   packetHandlers.push(handler);
@@ -62,10 +86,11 @@ export function connectMqtt(config: MqttConfig): MqttClient {
   return client;
 }
 
-type EventType = 'up' | 'ack' | 'down' | 'stats' | 'unknown';
+type EventType = 'up' | 'ack' | 'down' | 'stats' | 'txack' | 'unknown';
 
 function getEventType(topic: string): EventType {
   if (topic.includes('/event/up')) return 'up';
+  if (topic.includes('/event/txack')) return 'txack';
   if (topic.includes('/event/ack')) return 'ack';
   if (topic.includes('/command/down')) return 'down';
   if (topic.includes('/event/stats')) return 'stats';
@@ -73,13 +98,18 @@ function getEventType(topic: string): EventType {
 }
 
 function isApplicationTopic(topic: string): boolean {
-  return topic.includes('/application/') || topic.includes('application/');
+  return topic.startsWith('application/');
 }
 
 function handleMessage(topic: string, message: Buffer, format: 'protobuf' | 'json'): void {
-  // Application-level event/up: extract gateway locations only (don't parse packets to avoid duplicates)
-  if (isApplicationTopic(topic) && getEventType(topic) === 'up') {
-    handleApplicationUplink(message, format);
+  const eventType = getEventType(topic);
+
+  // Application-level events — handle separately, don't parse as gateway packets
+  if (isApplicationTopic(topic)) {
+    if (eventType === 'up') handleApplicationUplink(message, format);
+    else if (eventType === 'txack') handleApplicationTxAck(message);
+    else if (eventType === 'ack') handleApplicationAck(message);
+    else if (eventType === 'down') handleApplicationDownlink(topic, message);
     return;
   }
 
@@ -91,7 +121,6 @@ function handleMessage(topic: string, message: Buffer, format: 'protobuf' | 'jso
   }
 
   const gatewayIdFromTopic = parts[gatewayIdx + 1];
-  const eventType = getEventType(topic);
   const timestamp = new Date();
   let packet: ParsedPacket | null = null;
   let gatewayLocation: GatewayLocation | null = null;
@@ -158,23 +187,220 @@ function handleMessage(topic: string, message: Buffer, format: 'protobuf' | 'jso
   }
 }
 
-function handleApplicationUplink(message: Buffer, format: 'protobuf' | 'json'): void {
+function handleApplicationDownlink(topic: string, message: Buffer): void {
   try {
-    if (format === 'json') {
-      const frame = JSON.parse(message.toString());
-      const locations = extractGatewayLocationsFromJSON(frame);
-      for (const [gwId, loc] of locations) {
-        emitLocation(gwId, loc);
-      }
-    } else {
-      // Protobuf: integration.UplinkEvent has rxInfo as repeated field 12
-      const locations = decodeApplicationUplinkLocations(message);
-      for (const [gwId, loc] of locations) {
-        emitLocation(gwId, loc);
+    // Topic: application/{appId}/device/{devEui}/command/down
+    const parts = topic.split('/');
+    const devIdx = parts.indexOf('device');
+    const appIdx = parts.indexOf('application');
+    if (devIdx === -1 || appIdx === -1) return;
+    const devEui = parts[devIdx + 1];
+    const applicationId = parts[appIdx + 1];
+    if (!devEui || !applicationId) return;
+
+    const payload = JSON.parse(message.toString()) as Record<string, unknown>;
+    const payloadB64 = payload.data as string | undefined;
+    const payloadSize = payloadB64 ? Buffer.from(payloadB64, 'base64').length : 0;
+
+    const event: ChirpStackDownlinkEvent = {
+      devEui: devEui.toUpperCase(),
+      applicationId,
+      confirmed: payload.confirmed === true,
+      fPort: payload.fPort != null ? Number(payload.fPort) : null,
+      payloadSize,
+      timestamp: new Date(),
+    };
+
+    for (const handler of csDownlinkHandlers) {
+      try { handler(event); } catch (err) { console.error('CS downlink handler error:', err); }
+    }
+  } catch (_) { /* ignore */ }
+}
+
+function handleApplicationTxAck(message: Buffer): void {
+  try {
+    const frame = JSON.parse(message.toString());
+    const event = parseChirpStackTxAckEvent(frame);
+    if (event && csTxAckHandlers.length > 0) {
+      for (const handler of csTxAckHandlers) {
+        try { handler(event); } catch (err) { console.error('CS txack handler error:', err); }
       }
     }
-  } catch (err) {
-    // Silently ignore parse errors for location extraction
+  } catch (_) { /* ignore */ }
+}
+
+function handleApplicationAck(message: Buffer): void {
+  try {
+    const frame = JSON.parse(message.toString());
+    const event = parseChirpStackAckEvent(frame);
+    if (event && csAckHandlers.length > 0) {
+      for (const handler of csAckHandlers) {
+        try { handler(event); } catch (err) { console.error('CS ack handler error:', err); }
+      }
+    }
+  } catch (_) { /* ignore */ }
+}
+
+function parseChirpStackTxAckEvent(frame: Record<string, unknown>): ChirpStackTxAckEvent | null {
+  try {
+    const deviceInfo = frame.deviceInfo as Record<string, unknown> | undefined;
+    if (!deviceInfo) return null;
+    const devEui = deviceInfo.devEui as string | undefined;
+    if (!devEui) return null;
+
+    const txInfo = frame.txInfo as Record<string, unknown> | undefined;
+    const frequency = txInfo ? Number(txInfo.frequency ?? 0) : 0;
+    const modulation = txInfo?.modulation as Record<string, unknown> | undefined;
+    const lora = modulation?.lora as Record<string, unknown> | undefined;
+    const spreadingFactor = lora ? (Number(lora.spreadingFactor ?? 0) || null) : null;
+    const bandwidth = lora ? Number(lora.bandwidth ?? 125000) : 125000;
+    const power = txInfo?.power != null ? Number(txInfo.power) : null;
+
+    let timestamp = new Date();
+    if (frame.time) {
+      const parsed = new Date(frame.time as string);
+      if (!isNaN(parsed.getTime())) timestamp = parsed;
+    }
+
+    return {
+      devEui: devEui.toUpperCase(),
+      deviceName: (deviceInfo.deviceName as string) ?? '',
+      applicationId: (deviceInfo.applicationId as string) ?? '',
+      applicationName: (deviceInfo.applicationName as string | undefined) ?? null,
+      downlinkId: frame.downlinkId != null ? Number(frame.downlinkId) : null,
+      fCntDown: frame.fCntDown != null ? Number(frame.fCntDown) : null,
+      gatewayId: (frame.gatewayId as string | undefined) ?? null,
+      frequency,
+      spreadingFactor: spreadingFactor && spreadingFactor > 0 ? spreadingFactor : null,
+      bandwidth,
+      power,
+      timestamp,
+    };
+  } catch (_) { return null; }
+}
+
+function parseChirpStackAckEvent(frame: Record<string, unknown>): ChirpStackAckEvent | null {
+  try {
+    const deviceInfo = frame.deviceInfo as Record<string, unknown> | undefined;
+    if (!deviceInfo) return null;
+    const devEui = deviceInfo.devEui as string | undefined;
+    if (!devEui) return null;
+
+    let timestamp = new Date();
+    if (frame.time) {
+      const parsed = new Date(frame.time as string);
+      if (!isNaN(parsed.getTime())) timestamp = parsed;
+    }
+
+    return {
+      devEui: devEui.toUpperCase(),
+      deviceName: (deviceInfo.deviceName as string) ?? '',
+      applicationId: (deviceInfo.applicationId as string) ?? '',
+      applicationName: (deviceInfo.applicationName as string | undefined) ?? null,
+      acknowledged: frame.acknowledged === true,
+      fCntDown: frame.fCntDown != null ? Number(frame.fCntDown) : null,
+      timestamp,
+    };
+  } catch (_) { return null; }
+}
+
+function handleApplicationUplink(message: Buffer, format: 'protobuf' | 'json'): void {
+  // Always try to parse as JSON for ChirpStack application events
+  // (application integration events are always JSON regardless of gateway bridge format)
+  try {
+    const frame = JSON.parse(message.toString());
+
+    // Extract gateway locations
+    const locations = extractGatewayLocationsFromJSON(frame);
+    for (const [gwId, loc] of locations) {
+      emitLocation(gwId, loc);
+    }
+
+    // Parse as ChirpStack application uplink event and emit to CS handlers
+    const csEvent = parseChirpStackUplinkEvent(frame);
+    if (csEvent && csUplinkHandlers.length > 0) {
+      for (const handler of csUplinkHandlers) {
+        try {
+          handler(csEvent);
+        } catch (err) {
+          console.error('ChirpStack uplink handler error:', err);
+        }
+      }
+    }
+  } catch (jsonErr) {
+    // Not JSON — fall back to protobuf location extraction
+    if (format !== 'json') {
+      try {
+        const locations = decodeApplicationUplinkLocations(message);
+        for (const [gwId, loc] of locations) {
+          emitLocation(gwId, loc);
+        }
+      } catch (_err) {
+        // Silently ignore
+      }
+    }
+  }
+}
+
+function parseChirpStackUplinkEvent(frame: Record<string, unknown>): ChirpStackUplinkEvent | null {
+  try {
+    const deviceInfo = frame.deviceInfo as Record<string, unknown> | undefined;
+    if (!deviceInfo) return null;
+
+    const devEui = deviceInfo.devEui as string | undefined;
+    if (!devEui) return null;
+
+    const rxInfo = frame.rxInfo as Array<Record<string, unknown>> | undefined;
+    const firstRx = rxInfo && rxInfo.length > 0 ? rxInfo[0] : null;
+    const rssi = firstRx ? Number(firstRx.rssi ?? 0) : 0;
+    const snr = firstRx ? Number(firstRx.snr ?? 0) : 0;
+
+    const txInfo = frame.txInfo as Record<string, unknown> | undefined;
+    const frequency = txInfo ? Number(txInfo.frequency ?? 0) : 0;
+
+    const modulation = txInfo?.modulation as Record<string, unknown> | undefined;
+    const lora = modulation?.lora as Record<string, unknown> | undefined;
+    const spreadingFactor = lora ? Number(lora.spreadingFactor ?? 0) || null : null;
+    const bandwidth = lora ? Number(lora.bandwidth ?? 125000) : 125000;
+
+    // Decode payload to get size
+    const payloadB64 = frame.data as string | undefined;
+    let payloadSize = 0;
+    if (payloadB64) {
+      try {
+        payloadSize = Buffer.from(payloadB64, 'base64').length;
+      } catch (_) {
+        payloadSize = 0;
+      }
+    }
+
+    // Parse timestamp
+    let timestamp = new Date();
+    if (frame.time) {
+      const parsed = new Date(frame.time as string);
+      if (!isNaN(parsed.getTime())) timestamp = parsed;
+    }
+
+    return {
+      devEui: devEui.toUpperCase(),
+      devAddr: (frame.devAddr as string | undefined) ?? null,
+      deviceName: (deviceInfo.deviceName as string) ?? '',
+      applicationId: (deviceInfo.applicationId as string) ?? '',
+      applicationName: (deviceInfo.applicationName as string | undefined) ?? null,
+      rssi,
+      snr,
+      dr: frame.dr != null ? Number(frame.dr) : null,
+      frequency,
+      spreadingFactor: spreadingFactor && spreadingFactor > 0 ? spreadingFactor : null,
+      bandwidth,
+      payloadSize,
+      fCnt: frame.fCnt != null ? Number(frame.fCnt) : null,
+      fPort: frame.fPort != null ? Number(frame.fPort) : null,
+      confirmed: frame.confirmed != null ? Boolean(frame.confirmed) : null,
+      timestamp,
+    };
+  } catch (_err) {
+    return null;
   }
 }
 

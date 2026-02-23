@@ -128,5 +128,45 @@ export async function runMigrations(): Promise<void> {
   await sql`CALL refresh_continuous_aggregate('packets_hourly', NULL, NULL)`;
   await sql`CALL refresh_continuous_aggregate('packets_channel_sf_hourly', NULL, NULL)`;
 
+  // ChirpStack application packets table
+  await sql`
+    CREATE TABLE IF NOT EXISTS cs_packets (
+      timestamp        TIMESTAMPTZ NOT NULL,
+      dev_eui          TEXT NOT NULL,
+      dev_addr         TEXT,
+      device_name      TEXT NOT NULL DEFAULT '',
+      application_id   TEXT NOT NULL DEFAULT '',
+      operator         TEXT NOT NULL DEFAULT '',
+      frequency        BIGINT NOT NULL,
+      spreading_factor SMALLINT,
+      bandwidth        INTEGER NOT NULL,
+      rssi             SMALLINT NOT NULL,
+      snr              REAL NOT NULL,
+      payload_size     INTEGER NOT NULL,
+      airtime_us       INTEGER NOT NULL,
+      f_cnt            BIGINT,
+      f_port           SMALLINT,
+      confirmed        BOOLEAN
+    )
+  `;
+
+  await sql`SELECT create_hypertable('cs_packets', 'timestamp', if_not_exists => TRUE)`;
+  await sql`SELECT add_retention_policy('cs_packets', INTERVAL '8 days', if_not_exists => TRUE)`;
+
+  // ChirpStack device metadata table (one row per devEUI)
+  await sql`
+    CREATE TABLE IF NOT EXISTS cs_devices (
+      dev_eui          TEXT PRIMARY KEY,
+      dev_addr         TEXT,
+      device_name      TEXT NOT NULL,
+      application_id   TEXT NOT NULL,
+      application_name TEXT,
+      last_seen        TIMESTAMPTZ NOT NULL,
+      packet_count     BIGINT NOT NULL DEFAULT 0
+    )
+  `;
+
+  await sql`CREATE INDEX IF NOT EXISTS cs_packets_dev_eui_ts_idx ON cs_packets (dev_eui, timestamp DESC)`;
+
   console.log('Migrations complete');
 }

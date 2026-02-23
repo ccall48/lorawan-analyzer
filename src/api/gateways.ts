@@ -6,6 +6,8 @@ import {
   getGatewayDevices,
   getGatewayOperatorsWithDeviceCounts,
   getDevicesForGatewayOperator,
+  getCsDevices,
+  getCsGatewayStats,
 } from '../db/queries.js';
 
 export async function gatewayRoutes(fastify: FastifyInstance): Promise<void> {
@@ -74,5 +76,24 @@ export async function gatewayRoutes(fastify: FastifyInstance): Promise<void> {
       limit
     );
     return { devices };
+  });
+
+  // Get ChirpStack devices (active in time window)
+  fastify.get<{
+    Querystring: { hours?: string; gateway_id?: string };
+  }>('/api/cs-devices', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const gatewayId = request.query.gateway_id || null;
+    const devices = await getCsDevices(hours, gatewayId);
+    return { devices };
+  });
+
+  // Returns gateways active for CS devices with CS-specific packet counts
+  fastify.get<{
+    Querystring: { hours?: string };
+  }>('/api/cs-gateway-ids', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const stats = await getCsGatewayStats(hours);
+    return { gateways: stats };
   });
 }

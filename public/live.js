@@ -16,7 +16,7 @@ let selectedGroup = null;
 let liveEntries = [];
 let ws = null;
 let gateways = [];
-let filter = { showOwned: true, showForeign: true, prefixes: [] };
+let filter = { mode: 'all', prefixes: [] };
 let typeFilter = { up: true, join: true, down: true, ack: true };
 let operatorColors = {};
 
@@ -37,8 +37,7 @@ function readUrlState() {
   typeFilter.join = p.get('join') !== '0';
   typeFilter.down = p.get('down') !== '0';
   typeFilter.ack  = p.get('ack')  !== '0';
-  filter.showOwned   = p.get('owned')   !== '0';
-  filter.showForeign = p.get('foreign') !== '0';
+  filter.mode     = p.get('mode') || 'all';
   const search = p.get('search') || '';
   const rssiMin = p.get('rssi_min');
   const rssiMax = p.get('rssi_max');
@@ -53,8 +52,10 @@ function buildParams() {
   if (!typeFilter.join) p.set('join', '0'); else p.delete('join');
   if (!typeFilter.down) p.set('down', '0'); else p.delete('down');
   if (!typeFilter.ack)  p.set('ack',  '0'); else p.delete('ack');
-  if (!filter.showOwned)   p.set('owned',   '0'); else p.delete('owned');
-  if (!filter.showForeign) p.set('foreign', '0'); else p.delete('foreign');
+  if (filter.mode !== 'all') p.set('mode', filter.mode); else p.delete('mode');
+  // Remove old toggle params
+  p.delete('owned');
+  p.delete('foreign');
   const searchVal = document.getElementById('search-input')?.value?.trim();
   if (searchVal) p.set('search', searchVal); else p.delete('search');
   if (selectedGroup) p.set('group', selectedGroup); else p.delete('group');
@@ -89,15 +90,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   await Promise.all([loadMyDevicesConfig(), loadOperatorColors()]);
 
   // Apply URL state to UI
-  document.getElementById('toggle-owned').classList.toggle('active', filter.showOwned);
-  document.getElementById('toggle-foreign').classList.toggle('active', filter.showForeign);
+  document.getElementById('device-filter-mode').value = filter.mode;
   document.getElementById('toggle-up').classList.toggle('active', typeFilter.up);
   document.getElementById('toggle-join').classList.toggle('active', typeFilter.join);
   document.getElementById('toggle-down').classList.toggle('active', typeFilter.down);
   document.getElementById('toggle-ack').classList.toggle('active', typeFilter.ack);
 
   const searchEl = document.getElementById('search-input');
+  const searchClearEl = document.getElementById('search-clear');
   if (initSearch) searchEl.value = initSearch;
+
+  function updateSearchClear() {
+    searchClearEl.classList.toggle('hidden', !searchEl.value);
+  }
+  updateSearchClear();
+
+  searchEl.addEventListener('input', () => { updateSearchClear(); });
+  searchClearEl.addEventListener('click', () => {
+    searchEl.value = '';
+    updateSearchClear();
+    renderGatewayTabs();
+    pushUrlState();
+    reloadWithNewFilter();
+  });
 
   // RSSI range slider
   const rssiMinEl = document.getElementById('rssi-min');
@@ -144,6 +159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     showAddr: true,
     showOperator: true,
     clickable: true,
+    csMode: filter.mode === 'chirpstack',
     noFilterBar: true,
     countEl: document.getElementById('packet-count'),
     isMyDevice,
@@ -167,18 +183,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Device ownership filter toggles
-  document.getElementById('toggle-owned').addEventListener('click', (e) => {
-    filter.showOwned = !filter.showOwned;
-    e.target.classList.toggle('active', filter.showOwned);
+  // Device filter mode dropdown
+  document.getElementById('device-filter-mode').addEventListener('change', (e) => {
+    filter.mode = e.target.value;
+    setPacketFeedCsMode(filter.mode === 'chirpstack');
     pushUrlState();
-    reloadWithNewFilter();
-  });
-
-  document.getElementById('toggle-foreign').addEventListener('click', (e) => {
-    filter.showForeign = !filter.showForeign;
-    e.target.classList.toggle('active', filter.showForeign);
-    pushUrlState();
+    refreshCsGatewayIds();
     reloadWithNewFilter();
   });
 
@@ -203,16 +213,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectedHours = 24;
     selectedGroup = null;
     document.getElementById('group-filter').value = '';
-    filter.showOwned = true;
-    filter.showForeign = true;
+    filter.mode = 'all';
+    document.getElementById('device-filter-mode').value = 'all';
     typeFilter = { up: true, join: true, down: true, ack: true };
     searchEl.value = '';
     rssiMinEl.value = -140;
     rssiMaxEl.value = -30;
     updateRssiLabel();
-    document.getElementById('toggle-owned').classList.add('active');
-    document.getElementById('toggle-foreign').classList.add('active');
     ['up', 'join', 'down', 'ack'].forEach(k => document.getElementById(`toggle-${k}`).classList.add('active'));
+    refreshCsGatewayIds();
     renderGatewayTabs();
     updateGatewayColumnVisibility();
     pushUrlState();
@@ -271,14 +280,26 @@ function getOperatorStyle(operator) {
 
 // Gateway Management
 async function loadGateways() {
-  const data = await api('/api/gateways');
-  gateways = data.gateways || [];
+  const [gwData, csData] = await Promise.all([
+    api('/api/gateways'),
+    filter.mode === 'chirpstack'
+      ? api(`/api/cs-gateway-ids?hours=${selectedHours}`)
+      : Promise.resolve(null),
+  ]);
+  gateways = gwData.gateways || [];
+  csGatewayStats = csData
+    ? new Map((csData.gateways || []).map(g => [g.gateway_id, g.packet_count]))
+    : null;
   renderGatewayTabs();
 }
 
 function renderGatewayTabs() {
-  buildGatewayTabs(gateways, selectedGateway, 'search-input', selectedGroup);
+  buildGatewayTabs(getFilteredGateways(), selectedGateway, 'search-input', selectedGroup);
   updateGatewayColumnVisibility();
+}
+
+function refreshCsGatewayIds() {
+  return _refreshCsGatewayIds(() => renderGatewayTabs());
 }
 
 function updateGatewayColumnVisibility() {
@@ -306,15 +327,16 @@ async function loadRecentPackets(gatewayId = null) {
     const params = new URLSearchParams({ limit: '500' });
     if (gatewayId) params.set('gateway_id', gatewayId);
 
-    // Determine filter mode based on filter settings
-    if (filter.showOwned && filter.showForeign) {
-      params.set('filter_mode', 'all');
-    } else if (filter.showOwned && !filter.showForeign) {
+    if (filter.mode === 'chirpstack') {
+      params.set('source', 'chirpstack');
+    } else if (filter.mode === 'owned') {
       params.set('filter_mode', 'owned');
       params.set('prefixes', filter.prefixes.join(','));
-    } else if (!filter.showOwned && filter.showForeign) {
+    } else if (filter.mode === 'foreign') {
       params.set('filter_mode', 'foreign');
       params.set('prefixes', filter.prefixes.join(','));
+    } else {
+      params.set('filter_mode', 'all');
     }
 
     // Add packet type filter
@@ -352,9 +374,9 @@ async function loadRecentPackets(gatewayId = null) {
         : '-';
       const livePacket = {
         timestamp: parseUTCTimestamp(p.timestamp).getTime(),
-        gateway_id: p.gateway_id,
+        gateway_id: p.gateway_id || '',
         gateway_name: p.gateway_name || null,
-        type: p.packet_type,
+        type: p.packet_type || 'data',
         dev_addr: p.dev_addr,
         f_cnt: p.f_cnt,
         f_port: p.f_port,
@@ -369,6 +391,8 @@ async function loadRecentPackets(gatewayId = null) {
         airtime_ms: p.airtime_us ? p.airtime_us / 1000 : 0,
         tx_status: p.packet_type === 'tx_ack' ? p.operator : undefined,
         confirmed: p.confirmed,
+        device_name: p.device_name || null,
+        source: p.dev_eui && !p.gateway_id ? 'chirpstack' : undefined,
       };
       liveEntries.push(livePacket);
     }
@@ -412,11 +436,13 @@ function connectWebSocket(gatewayId = null) {
   if (rssiLo > -140) wsParams.set('rssi_min', rssiLo);
   if (rssiHi < -30) wsParams.set('rssi_max', rssiHi);
 
-  // Add ownership filter
-  if (filter.showOwned && !filter.showForeign) {
+  // Add device filter mode
+  if (filter.mode === 'chirpstack') {
+    wsParams.set('filter_mode', 'chirpstack');
+  } else if (filter.mode === 'owned') {
     wsParams.set('filter_mode', 'owned');
     wsParams.set('prefixes', filter.prefixes.join(','));
-  } else if (!filter.showOwned && filter.showForeign) {
+  } else if (filter.mode === 'foreign') {
     wsParams.set('filter_mode', 'foreign');
     wsParams.set('prefixes', filter.prefixes.join(','));
   }

@@ -29,6 +29,7 @@
     noFilterBar: false,    // skip generating filter bar (page provides its own)
     countEl: null,         // external element for packet count
     storagePrefix: '',     // prefix for localStorage keys
+    csMode: false,         // ChirpStack application mode — renames columns
   };
 
   // Parse UTC timestamp from DB
@@ -107,17 +108,19 @@
   }
 
   function renderHeader() {
-    const gwCol = opts.showGateway ? '<span class="gateway-col" style="width:140px">Gateway</span>' : '';
-    const gwNameCol = opts.showGateway ? '<span class="gateway-col" style="width:140px">Name</span>' : '';
-    const addrCol = opts.showAddr ? '<span style="width:130px">Addr / DevEUI</span>' : '';
-    const operatorCol = opts.showOperator ? '<span style="width:120px">Operator</span>' : '';
+    const isCs = opts.csMode;
+    const gwCol = opts.showGateway ? `<span class="gateway-col" style="width:140px">${isCs ? 'GW ID' : 'Gateway'}</span>` : '';
+    const gwNameCol = opts.showGateway ? `<span class="gateway-col" style="width:140px">${isCs ? 'GW Name' : 'Name'}</span>` : '';
+    const addrCol = opts.showAddr ? `<span style="width:130px">${isCs ? 'Device Name' : 'Addr / DevEUI'}</span>` : '';
+    const operatorCol = opts.showOperator ? `<span style="width:120px">${isCs ? 'Application' : 'Operator'}</span>` : '';
+    const fcntCol = isCs ? 'DevEUI' : 'FCnt / JoinEUI / DLID';
 
     headerEl.innerHTML = `
       <span style="width:140px">Time</span>
       <span style="width:140px">Type</span>
       ${operatorCol}
       ${addrCol}
-      <span style="width:170px">FCnt / JoinEUI / DLID</span>
+      <span style="width:170px">${fcntCol}</span>
       <span style="width:48px">FPort</span>
       <span style="width:80px">DR</span>
       <span style="width:56px">Freq</span>
@@ -259,16 +262,25 @@
     }
 
     // Uplink
-    const clickAttr = opts.clickable && p.dev_addr ? `onclick="window.location.href='device.html?' + new URLSearchParams({...Object.fromEntries(new URLSearchParams(location.search)), addr: '${p.dev_addr}'}).toString()" style="cursor:pointer"` : '';
+    const isCs = p.source === 'chirpstack';
+    const clickAttr = opts.clickable
+      ? (isCs && p.dev_eui
+          ? `onclick="window.location.href='device.html?' + new URLSearchParams({...Object.fromEntries(new URLSearchParams(location.search)), eui: '${p.dev_eui}'}).toString()" style="cursor:pointer"`
+          : (p.dev_addr ? `onclick="window.location.href='device.html?' + new URLSearchParams({...Object.fromEntries(new URLSearchParams(location.search)), addr: '${p.dev_addr}'}).toString()" style="cursor:pointer"` : ''))
+      : '';
     const operatorCol = opts.showOperator ? `<span class="operator" ${operatorStyle}>${p.operator}</span>` : '';
-    const addrCol = opts.showAddr ? `<span class="addr ${isMine ? 'mine' : ''}">${p.dev_addr}</span>` : '';
+    const addrText = isCs ? (p.device_name || p.dev_eui || p.dev_addr || '?') : p.dev_addr;
+    const addrCol = opts.showAddr ? `<span class="addr ${isMine ? 'mine' : ''}" title="${isCs ? (p.dev_eui || '') : ''}">${addrText}</span>` : '';
+    const fcntText = isCs ? (p.dev_eui || '-') : (p.f_cnt ?? '-');
+    const csGwCol = opts.showGateway ? `<span class="gw gateway-col" style="width:140px">-</span>` : '';
+    const csGwNameCol = opts.showGateway ? `<span class="gw gateway-col" style="width:140px">-</span>` : '';
     return `
       <div class="live-entry data ${isMine ? 'my-device' : ''}" ${clickAttr}>
         <span class="time">${datetime}</span>
         <span class="type ${typeClass}">${typeLabel}</span>
         ${operatorCol}
         ${addrCol}
-        <span class="fcnt">${p.f_cnt ?? '-'}</span>
+        <span class="fcnt ${isCs ? 'text-white/40' : ''}" style="${isCs ? 'font-size:9px' : ''}">${fcntText}</span>
         <span class="fport">${p.f_port ?? '-'}</span>
         <span class="dr">${p.data_rate}</span>
         <span class="freq">${p.frequency?.toFixed(1) ?? '-'}</span>
@@ -276,8 +288,8 @@
         <span class="snr ${snrClass}">${p.snr?.toFixed(1)} dB</span>
         <span class="size">${p.payload_size}B</span>
         <span class="airtime">${formatAirtime(p.airtime_ms)}</span>
-        ${gwCol}
-        ${gwNameCol}
+        ${isCs ? csGwCol : gwCol}
+        ${isCs ? csGwNameCol : gwNameCol}
       </div>
     `;
   }
@@ -399,6 +411,11 @@
 
   window.renderPacketFeed = function () {
     renderFeed();
+  };
+
+  window.setPacketFeedCsMode = function (csMode) {
+    opts.csMode = csMode;
+    renderHeader();
   };
 
   window.isPacketFeedScrolled = function () {

@@ -3,10 +3,11 @@ import fs from 'fs';
 import { loadConfig } from './config.js';
 import { initPostgres, closePostgres } from './db/index.js';
 import { runMigrations } from './db/migrations.js';
-import { insertPacket, flushPackets, upsertGateway, getCustomOperators } from './db/queries.js';
-import { connectMqtt, onPacket, onGatewayLocation, disconnectMqtt } from './mqtt/consumer.js';
+import { insertPacket, flushPackets, upsertGateway, getCustomOperators, insertCsPacket, upsertCsDevice, flushCsPackets, getCsDevicesForCache } from './db/queries.js';
+import { connectMqtt, onPacket, onGatewayLocation, disconnectMqtt, onChirpStackUplink, onChirpStackTxAck, onChirpStackAck, onChirpStackDownlink } from './mqtt/consumer.js';
 import { initOperatorPrefixes } from './operators/prefixes.js';
 import { startApi } from './api/index.js';
+import { broadcastCsUplink, broadcastCsTxAck, broadcastCsAck, broadcastCsDownlink, updateCsDeviceCache } from './websocket/live.js';
 import { SessionTracker } from './session/tracker.js';
 import type { ParsedPacket, MyDeviceRange, OperatorMapping } from './types.js';
 
@@ -30,7 +31,7 @@ function buildKnownDeviceRanges(operators: OperatorMapping[]): MyDeviceRange[] {
   const ranges: MyDeviceRange[] = [];
 
   for (const op of operators) {
-    if (!op.known_devices) continue;
+    if (!op.known_devices || !op.prefix) continue;
     const prefixes = Array.isArray(op.prefix) ? op.prefix : [op.prefix];
     for (const prefix of prefixes) {
       ranges.push({
@@ -57,6 +58,13 @@ async function main(): Promise<void> {
 
   // Run migrations
   await runMigrations();
+
+  // Pre-populate CS device cache from DB (for devAddr→devEui reverse lookup)
+  const cachedDevices = await getCsDevicesForCache();
+  for (const d of cachedDevices) {
+    updateCsDeviceCache(d.dev_eui, d.device_name, d.application_id, d.application_name, d.dev_addr);
+  }
+  console.log(`Pre-populated CS device cache: ${cachedDevices.length} devices`);
 
   // Seed gateway names from gateways.csv if present
   const csvPath = path.resolve(path.dirname(path.resolve(CONFIG_PATH)), 'gateways.csv');
@@ -137,6 +145,36 @@ async function main(): Promise<void> {
     });
   });
 
+  // Handle ChirpStack application uplinks
+  onChirpStackUplink(async (event) => {
+    try {
+      await insertCsPacket(event);
+      await upsertCsDevice(event);
+      broadcastCsUplink(event);
+      console.log(`[CS] ${event.deviceName} (${event.devEui}) FCnt=${event.fCnt} RSSI=${event.rssi}dBm`);
+    } catch (err) {
+      console.error('Error processing ChirpStack uplink:', err);
+    }
+  });
+
+  // Handle ChirpStack TX-ACK (gateway confirmed downlink transmission)
+  onChirpStackTxAck((event) => {
+    broadcastCsTxAck(event);
+    console.log(`[CS txack] ${event.deviceName} (${event.devEui}) FCntDown=${event.fCntDown} GW=${event.gatewayId}`);
+  });
+
+  // Handle ChirpStack ACK (device confirmed downlink receipt)
+  onChirpStackAck((event) => {
+    broadcastCsAck(event);
+    console.log(`[CS ack] ${event.deviceName} (${event.devEui}) FCntDown=${event.fCntDown} ack=${event.acknowledged}`);
+  });
+
+  // Handle ChirpStack downlink command (application/.../command/down)
+  onChirpStackDownlink((event) => {
+    broadcastCsDownlink(event);
+    console.log(`[CS down] ${event.devEui} fPort=${event.fPort} confirmed=${event.confirmed} size=${event.payloadSize}B`);
+  });
+
   // Build known device ranges from operators with known_devices = true
   const myDeviceRanges = buildKnownDeviceRanges(config.operators);
   console.log(`Known device ranges: ${myDeviceRanges.length} prefixes`);
@@ -163,6 +201,7 @@ async function shutdown(): Promise<void> {
     sessionTrackerRef?.stopCleanup();
     await disconnectMqtt();
     await flushPackets();
+    await flushCsPackets();
     await closePostgres();
   } catch (err) {
     console.error('Error during shutdown:', err);

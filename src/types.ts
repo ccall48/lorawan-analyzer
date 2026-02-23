@@ -32,7 +32,7 @@ export interface ApiConfig {
 }
 
 export interface OperatorMapping {
-  prefix: string | string[];
+  prefix?: string | string[];
   name: string;
   priority?: number;
   known_devices?: boolean;
@@ -202,4 +202,70 @@ export interface DistributionItem {
   key: string;
   value: number;
   count: number;
+}
+
+export interface ChirpStackUplinkEvent {
+  devEui: string;
+  devAddr: string | null;
+  deviceName: string;
+  applicationId: string;
+  applicationName: string | null;
+  rssi: number;
+  snr: number;
+  dr: number | null;
+  frequency: number;  // Hz
+  spreadingFactor: number | null;
+  bandwidth: number;  // Hz
+  payloadSize: number;
+  fCnt: number | null;
+  fPort: number | null;
+  confirmed: boolean | null;
+  timestamp: Date;
+}
+
+export interface CsDevice {
+  dev_eui: string;
+  dev_addr: string | null;
+  device_name: string;
+  application_id: string;
+  application_name: string | null;
+  last_seen: string;
+  packet_count: number;
+}
+
+// ChirpStack downlink command (application/.../command/down)
+export interface ChirpStackDownlinkEvent {
+  devEui: string;
+  applicationId: string;
+  confirmed: boolean;
+  fPort: number | null;
+  payloadSize: number;
+  timestamp: Date;
+}
+
+// ChirpStack TX-ACK event (application/.../event/txack)
+export interface ChirpStackTxAckEvent {
+  devEui: string;
+  deviceName: string;
+  applicationId: string;
+  applicationName: string | null;
+  downlinkId: number | null;
+  fCntDown: number | null;
+  gatewayId: string | null;
+  frequency: number;          // Hz
+  spreadingFactor: number | null;
+  bandwidth: number;          // Hz
+  power: number | null;
+  timestamp: Date;
+}
+
+// ChirpStack ACK event (application/.../event/ack) — confirmed downlink acknowledged by device
+export interface ChirpStackAckEvent {
+  devEui: string;
+  deviceName: string;
+  applicationId: string;
+  applicationName: string | null;
+  acknowledged: boolean;
+  fCntDown: number | null;
+  timestamp: Date;
 }

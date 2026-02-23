@@ -6,6 +6,39 @@ function formatNumber(n) {
   return n.toString();
 }
 
+// --- Shared gateway CS filter state ---
+// Pages declare: let gateways = []; let filter = { mode: 'all', ... }; let selectedHours = 24;
+// This module manages csGatewayStats and exposes getFilteredGateways() + refreshCsGatewayIds().
+
+let csGatewayStats = null; // Map<gateway_id, packet_count> for CS mode, null = not loaded
+
+function getFilteredGateways() {
+  if (filter.mode === 'chirpstack' && csGatewayStats) {
+    return gateways
+      .filter(g => csGatewayStats.has(g.gateway_id))
+      .map(g => ({ ...g, packet_count: csGatewayStats.get(g.gateway_id) }));
+  }
+  return gateways;
+}
+
+// onRefreshed(filteredGateways) — optional page-specific callback after CS stats reload
+async function _refreshCsGatewayIds(onRefreshed) {
+  if (filter.mode !== 'chirpstack') {
+    if (csGatewayStats !== null) {
+      csGatewayStats = null;
+      if (onRefreshed) onRefreshed(getFilteredGateways());
+    }
+    return;
+  }
+  try {
+    const data = await api(`/api/cs-gateway-ids?hours=${selectedHours}`);
+    csGatewayStats = new Map((data.gateways || []).map(g => [g.gateway_id, g.packet_count]));
+    if (onRefreshed) onRefreshed(getFilteredGateways());
+  } catch (e) {
+    console.error('Failed to load CS gateway stats:', e);
+  }
+}
+
 // --- Shared gateway tab rendering ---
 // Each page calls initGatewayTabs(onSelect) once, then buildGatewayTabs(gateways, selectedGateway, searchInputId) to render.
 

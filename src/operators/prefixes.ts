@@ -42,6 +42,7 @@ export function initOperatorPrefixes(customOperators: Array<{ prefix: string | s
 
   // Add custom operators with higher priority (default 100)
   for (const op of customOperators) {
+    if (!op.prefix) continue;  // color-only entries (e.g. CS application names)
     const prefixes = Array.isArray(op.prefix) ? op.prefix : [op.prefix];
     for (const prefixStr of prefixes) {
       const { prefix, mask, bits } = parsePrefix(prefixStr);
