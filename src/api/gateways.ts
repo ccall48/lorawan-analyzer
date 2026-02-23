@@ -8,7 +8,22 @@ import {
   getDevicesForGatewayOperator,
   getCsDevices,
   getCsGatewayStats,
+  type DeviceFilter,
 } from '../db/queries.js';
+
+function parseDeviceFilter(filterMode: string, prefixes?: string): DeviceFilter | undefined {
+  if (filterMode === 'all' || !prefixes) return undefined;
+  const parsed = prefixes.split(',').map(p => {
+    const [hex, bitsStr] = p.split('/');
+    const bits = parseInt(bitsStr || '32', 10);
+    const prefix = parseInt(hex, 16);
+    const mask = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
+    return { prefix: (prefix & mask) >>> 0, mask };
+  });
+  if (filterMode === 'owned')   return { include: parsed };
+  if (filterMode === 'foreign') return { exclude: parsed };
+  return undefined;
+}
 
 export async function gatewayRoutes(fastify: FastifyInstance): Promise<void> {
   // List all gateways
@@ -48,6 +63,43 @@ export async function gatewayRoutes(fastify: FastifyInstance): Promise<void> {
     const rssiMax = request.query.rssi_max ? parseInt(request.query.rssi_max, 10) : undefined;
     const groupName = request.query.group_name || null;
     const devices = await getGatewayDevices(request.params.id, hours, limit, rssiMin, rssiMax, groupName);
+    return { devices };
+  });
+
+  // Get all devices across all gateways with optional filter_mode/source/prefixes/group_name
+  fastify.get<{
+    Querystring: { hours?: string; limit?: string; group_name?: string; filter_mode?: string; prefixes?: string; source?: string };
+  }>('/api/devices', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const limit = parseInt(request.query.limit ?? '500', 10);
+    const groupName = request.query.group_name || null;
+    const source = request.query.source;
+    if (source === 'chirpstack') {
+      const csDevices = await getCsDevices(hours, null);
+      // Normalise to the same shape as getGatewayDevices so the frontend card works
+      const devices = csDevices.map(d => ({
+        dev_addr: d.dev_addr ?? d.dev_eui,
+        dev_eui: d.dev_eui,
+        device_name: d.device_name,
+        operator: d.application_name ?? d.application_id,
+        packet_count: d.packet_count,
+        last_seen: d.last_seen,
+        avg_rssi: d.avg_rssi,
+        avg_snr: d.avg_snr,
+        avg_interval_s: 0,
+        missed_packets: 0,
+        loss_percent: d.loss_percent,
+        min_rssi: null as number | null,
+        max_rssi: null as number | null,
+        min_snr: null as number | null,
+        max_snr: null as number | null,
+        min_sf: null as number | null,
+        max_sf: null as number | null,
+      }));
+      return { devices };
+    }
+    const deviceFilter = parseDeviceFilter(request.query.filter_mode || 'all', request.query.prefixes);
+    const devices = await getGatewayDevices(null, hours, limit, undefined, undefined, groupName, deviceFilter);
     return { devices };
   });
 

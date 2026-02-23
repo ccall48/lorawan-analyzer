@@ -6,6 +6,65 @@ function formatNumber(n) {
   return n.toString();
 }
 
+// ---- Colour helpers (ported from iot-dashboard) ----
+
+function interpolateColor(c1, c2, ratio) {
+  return c1.map((v, i) => v + (c2[i] - v) * ratio);
+}
+
+// Gateway: blue → pink → purple → dark  (same as iot-dashboard)
+function calculateGatewayColor(ageSeconds) {
+  const THRESHOLD   = 3600 * 3;
+  const GREY_AT     = 3600 * 24 * 2;
+  const BYE_AT      = 3600 * 24 * 3;
+  let color;
+  if (ageSeconds <= THRESHOLD) {
+    color = interpolateColor([100, 130, 200], [200, 120, 127], ageSeconds / THRESHOLD);
+  } else if (ageSeconds <= GREY_AT) {
+    color = interpolateColor([200, 120, 127], [159, 110, 135], (ageSeconds - THRESHOLD) / (GREY_AT - THRESHOLD));
+  } else if (ageSeconds <= BYE_AT) {
+    color = interpolateColor([159, 110, 135], [53, 37, 45], (ageSeconds - GREY_AT) / (BYE_AT - GREY_AT));
+  } else {
+    color = [51, 51, 51];
+  }
+  return '#' + color.map(c => Math.round(c).toString(16).padStart(2, '0')).join('');
+}
+
+// Device: green → yellow → red → grey  (iot-dashboard style, fixed 6h threshold)
+// Green at 0, fully red at 6h, grey at 2 days, dark at 3 days
+function calculateDeviceColor(ageSeconds) {
+  const THRESHOLD = 3600 * 6;
+  const GREY_AT   = 3600 * 24 * 2;
+  const BYE_AT    = 3600 * 24 * 3;
+  let color;
+  if (ageSeconds <= THRESHOLD) {
+    const ratio = ageSeconds / THRESHOLD;
+    if (ratio <= 0.5) {
+      color = interpolateColor([120, 230, 160], [220, 230, 77], ratio * 2);
+    } else {
+      color = interpolateColor([220, 230, 77], [222, 0, 77], (ratio - 0.5) * 2);
+    }
+  } else if (ageSeconds <= GREY_AT) {
+    color = interpolateColor([222, 0, 77], [136, 136, 136], (ageSeconds - THRESHOLD) / (GREY_AT - THRESHOLD));
+  } else if (ageSeconds <= BYE_AT) {
+    color = interpolateColor([136, 136, 136], [51, 51, 51], (ageSeconds - GREY_AT) / (BYE_AT - GREY_AT));
+  } else {
+    color = [51, 51, 51];
+  }
+  return '#' + color.map(c => Math.round(c).toString(16).padStart(2, '0')).join('');
+}
+
+// Apply colour as diagonal gradient — matches iot-dashboard applyDarkStyle
+function applyCardColor(element, colorHex) {
+  const r = parseInt(colorHex.slice(1, 3), 16);
+  const g = parseInt(colorHex.slice(3, 5), 16);
+  const b = parseInt(colorHex.slice(5, 7), 16);
+  element.style.background = `linear-gradient(135deg, rgba(${r},${g},${b},0.12) 50%, rgba(${r},${g},${b},0.45))`;
+  element.style.color = 'rgba(255,255,255,1)';
+}
+
+// ---- end colour helpers ----
+
 // --- Shared gateway CS filter state ---
 // Pages declare: let gateways = []; let filter = { mode: 'all', ... }; let selectedHours = 24;
 // This module manages csGatewayStats and exposes getFilteredGateways() + refreshCsGatewayIds().
@@ -37,6 +96,18 @@ async function _refreshCsGatewayIds(onRefreshed) {
   } catch (e) {
     console.error('Failed to load CS gateway stats:', e);
   }
+}
+
+// Populate just the group dropdown — used by pages without gateway tabs (e.g. monitoring)
+function buildGroupFilter(gateways, selectedGroup) {
+  const groupSelect = document.getElementById('group-filter');
+  if (!groupSelect) return;
+  const groups = [...new Set(gateways.map(gw => gw.group_name).filter(Boolean))].sort();
+  const hasNoGroup = gateways.some(gw => !gw.group_name || gw.group_name.trim() === '') || selectedGroup === '__none__';
+  groupSelect.innerHTML = '<option value="">All Groups</option>' +
+    groups.map(g => `<option value="${g}">${g}</option>`).join('') +
+    (hasNoGroup ? '<option value="__none__">No Group</option>' : '');
+  groupSelect.value = selectedGroup || '';
 }
 
 // --- Shared gateway tab rendering ---

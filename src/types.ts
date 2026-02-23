@@ -231,6 +231,9 @@ export interface CsDevice {
   application_name: string | null;
   last_seen: string;
   packet_count: number;
+  avg_rssi: number | null;
+  avg_snr: number | null;
+  loss_percent: number;
 }
 
 // ChirpStack downlink command (application/.../command/down)

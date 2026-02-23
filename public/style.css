@@ -813,9 +813,10 @@ body {
   border-color: rgba(255, 255, 255, 0.35);
 }
 
-/* Header select dropdowns (group filter, device filter mode) */
+/* Header select dropdowns (group filter, device filter mode, sort) */
 #group-filter,
-#device-filter-mode {
+#device-filter-mode,
+#sort-select {
   background: #180e0a;
   color: rgba(255, 255, 255, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -830,19 +831,22 @@ body {
 }
 
 #group-filter:hover,
-#device-filter-mode:hover {
+#device-filter-mode:hover,
+#sort-select:hover {
   border-color: rgba(255, 255, 255, 0.3);
   color: rgba(255, 255, 255, 0.9);
 }
 
 #group-filter:focus,
-#device-filter-mode:focus {
+#device-filter-mode:focus,
+#sort-select:focus {
   border-color: rgba(255, 255, 255, 0.35);
   outline: none;
 }
 
 #group-filter option,
-#device-filter-mode option {
+#device-filter-mode option,
+#sort-select option {
   background: #180e0a;
   color: rgba(255, 255, 255, 0.85);
 }

@@ -348,7 +348,8 @@ export async function getGatewayDevices(
   limit: number = 100,
   rssiMin?: number,
   rssiMax?: number,
-  groupName?: string | null
+  groupName?: string | null,
+  deviceFilter?: DeviceFilter
 ): Promise<Array<{
   dev_addr: string;
   operator: string;
@@ -370,6 +371,8 @@ export async function getGatewayDevices(
 
   const gwFilterRaw = buildGatewayFilterSql('', gatewayId, groupName);
   const gwFilterP = buildGatewayFilterSql('p', gatewayId, groupName);
+  const devFilterRaw = buildDeviceFilterSql(deviceFilter);
+  const devFilterP   = buildDeviceFilterSql(deviceFilter);
 
   const rssiHaving: string[] = [];
   if (rssiMin !== undefined) rssiHaving.push(`AVG(p.rssi) >= ${rssiMin}`);
@@ -387,6 +390,7 @@ export async function getGatewayDevices(
         AND f_cnt IS NOT NULL
         AND timestamp > NOW() - make_interval(hours => ${hours})
         ${gwFilterRaw}
+        ${devFilterRaw}
     ),
     loss_stats AS (
       SELECT
@@ -423,6 +427,7 @@ export async function getGatewayDevices(
     WHERE p.packet_type = 'data'
       AND p.timestamp > NOW() - make_interval(hours => ${hours})
       ${gwFilterP}
+      ${devFilterP}
     GROUP BY p.dev_addr, l.missed
     ${havingClause}
     ORDER BY packet_count DESC
@@ -1856,6 +1861,27 @@ export async function getCsDevices(
     : '';
 
   const rows = await sql.unsafe(`
+    WITH pkt_lag AS (
+      SELECT
+        dev_eui,
+        rssi,
+        snr,
+        f_cnt,
+        LAG(f_cnt) OVER (PARTITION BY dev_eui ORDER BY timestamp) AS prev_fcnt
+      FROM cs_packets
+      WHERE timestamp > NOW() - make_interval(hours => ${hours})
+    ),
+    pkt_stats AS (
+      SELECT
+        dev_eui,
+        AVG(rssi)  AS avg_rssi,
+        AVG(snr)   AS avg_snr,
+        COUNT(*)   AS pkt_received,
+        SUM(CASE WHEN prev_fcnt IS NOT NULL AND f_cnt > prev_fcnt AND f_cnt - prev_fcnt > 1
+                 THEN f_cnt - prev_fcnt - 1 ELSE 0 END) AS pkt_missed
+      FROM pkt_lag
+      GROUP BY dev_eui
+    )
     SELECT
       d.dev_eui,
       d.dev_addr,
@@ -1863,22 +1889,35 @@ export async function getCsDevices(
       d.application_id,
       d.application_name,
       d.last_seen,
-      d.packet_count
+      d.packet_count,
+      p.avg_rssi,
+      p.avg_snr,
+      p.pkt_received,
+      p.pkt_missed
     FROM cs_devices d
+    LEFT JOIN pkt_stats p ON p.dev_eui = d.dev_eui
     WHERE d.last_seen > NOW() - make_interval(hours => ${hours})
     ${gwFilterSql}
     ORDER BY d.last_seen DESC
   `) as Array<Record<string, unknown>>;
 
-  return rows.map(r => ({
-    dev_eui: r.dev_eui as string,
-    dev_addr: r.dev_addr as string | null,
-    device_name: r.device_name as string,
-    application_id: r.application_id as string,
-    application_name: r.application_name as string | null,
-    last_seen: r.last_seen instanceof Date ? r.last_seen.toISOString() : String(r.last_seen),
-    packet_count: Number(r.packet_count),
-  }));
+  return rows.map(r => {
+    const received = Number(r.pkt_received ?? 0);
+    const missed   = Number(r.pkt_missed   ?? 0);
+    const expected = received + missed;
+    return {
+      dev_eui: r.dev_eui as string,
+      dev_addr: r.dev_addr as string | null,
+      device_name: r.device_name as string,
+      application_id: r.application_id as string,
+      application_name: r.application_name as string | null,
+      last_seen: r.last_seen instanceof Date ? r.last_seen.toISOString() : String(r.last_seen),
+      packet_count: Number(r.packet_count),
+      avg_rssi: r.avg_rssi != null ? Number(r.avg_rssi) : null,
+      avg_snr:  r.avg_snr  != null ? Number(r.avg_snr)  : null,
+      loss_percent: expected > 0 ? (missed / expected) * 100 : 0,
+    };
+  });
 }
 
 export async function getCsDeviceByEui(devEui: string): Promise<CsDevice | null> {
