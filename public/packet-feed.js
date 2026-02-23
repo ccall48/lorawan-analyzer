@@ -72,6 +72,7 @@
       p.operator,
       p.gateway_id,
       p.gateway_name,
+      p.border_gateway_id,
       p.tx_status,
       p.f_cnt?.toString(),
       p.data_rate,
@@ -106,14 +107,14 @@
   }
 
   function renderHeader() {
-    const gwCol = opts.showGateway ? '<span class="gateway-col" style="width:130px">Gateway</span>' : '';
+    const gwCol = opts.showGateway ? '<span class="gateway-col" style="width:140px">Gateway</span>' : '';
     const gwNameCol = opts.showGateway ? '<span class="gateway-col" style="width:140px">Name</span>' : '';
     const addrCol = opts.showAddr ? '<span style="width:130px">Addr / DevEUI</span>' : '';
     const operatorCol = opts.showOperator ? '<span style="width:120px">Operator</span>' : '';
 
     headerEl.innerHTML = `
       <span style="width:140px">Time</span>
-      <span style="width:150px">Type</span>
+      <span style="width:140px">Type</span>
       ${operatorCol}
       ${addrCol}
       <span style="width:170px">FCnt / JoinEUI / DLID</span>
@@ -177,7 +178,10 @@
     }
     const typeClass = isJoin ? 'join' : isDown ? 'downlink' : isTxAck ? 'ack' : 'up';
 
-    const gwCol = opts.showGateway ? `<span class="gw gateway-col" style="width:130px">${p.gateway_id || ''}</span>` : '';
+    const gwIdText = p.border_gateway_id
+      ? `${p.gateway_id}<span style="opacity:0.5">→${p.border_gateway_id}</span>`
+      : (p.gateway_id || '');
+    const gwCol = opts.showGateway ? `<span class="gw gateway-col" style="width:140px">${gwIdText}</span>` : '';
     const gwNameCol = opts.showGateway ? `<span class="gw gateway-col" style="width:140px">${p.gateway_name || '-'}</span>` : '';
     const operatorStyle = opts.getOperatorStyle ? opts.getOperatorStyle(p.operator) : 'class="op-unknown"';
 

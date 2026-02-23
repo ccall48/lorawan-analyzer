@@ -149,6 +149,7 @@ function convertToLivePacket(packet: ParsedPacket, gwRow?: { name: string | null
     timestamp: packet.timestamp.getTime(),
     gateway_id: packet.gateway_id,
     gateway_name: gwRow?.name ?? undefined,
+    border_gateway_id: packet.border_gateway_id ?? undefined,
     type: packet.packet_type,
     operator: packet.operator,
     data_rate: dataRate,

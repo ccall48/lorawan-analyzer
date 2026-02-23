@@ -36,7 +36,9 @@ export function parseUplinkFrame(
   const parsed = parsePHYPayload(payload);
   if (!parsed) return null;
 
-  const gatewayId = frame.rxInfo?.gatewayId ?? 'unknown';
+  const relayId = frame.rxInfo?.metadata?.relay_id;
+  const gatewayId = relayId ?? (frame.rxInfo?.gatewayId ?? 'unknown');
+  const borderGatewayId = relayId ? (frame.rxInfo?.gatewayId ?? null) : null;
   const frequency = frame.txInfo?.frequency ?? 0;
   const lora = frame.txInfo?.modulation?.lora;
   const bandwidth = lora?.bandwidth ?? 125000;
@@ -61,6 +63,7 @@ export function parseUplinkFrame(
     return {
       timestamp,
       gateway_id: gatewayId,
+      border_gateway_id: borderGatewayId,
       packet_type: 'join_request',
       dev_addr: null,
       join_eui: parsed.joinEui ?? null,
@@ -83,6 +86,7 @@ export function parseUplinkFrame(
     return {
       timestamp,
       gateway_id: gatewayId,
+      border_gateway_id: borderGatewayId,
       packet_type: 'data',
       dev_addr: parsed.devAddr ?? null,
       join_eui: null,

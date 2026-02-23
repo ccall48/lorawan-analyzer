@@ -65,6 +65,7 @@ export interface ParsedPacket {
   f_port: number | null;
   confirmed: boolean | null;  // true for confirmed uplink/downlink, false for unconfirmed, null for other types
   session_id?: string | null;
+  border_gateway_id?: string | null;  // Set when packet was relayed; holds the border gateway EUI
 }
 
 export interface LivePacket {
@@ -86,6 +87,7 @@ export interface LivePacket {
   airtime_ms: number;
   tx_status?: string;  // For tx_ack packets
   confirmed?: boolean;  // For data/downlink packets
+  border_gateway_id?: string;  // Set when packet was relayed via a mesh relay
 }
 
 export interface GatewayStats {

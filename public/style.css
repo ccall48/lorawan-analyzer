@@ -295,7 +295,7 @@ body {
 }
 
 .live-entry .type {
-  width: 150px;
+  width: 140px;
   flex-shrink: 0;
   font-size: 10px;
   font-weight: 600;

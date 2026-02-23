@@ -93,6 +93,11 @@ async function main(): Promise<void> {
       // Update gateway (with location and name if available from uplink metadata)
       await upsertGateway(packet.gateway_id, gatewayLocation?.name ?? null, gatewayLocation);
 
+      // If packet was relayed, also track the border gateway
+      if (packet.border_gateway_id) {
+        await upsertGateway(packet.border_gateway_id, null, null);
+      }
+
       // Log packet info
       let info: string;
       let logLine: string;
