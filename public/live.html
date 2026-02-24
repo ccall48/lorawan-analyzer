@@ -17,7 +17,7 @@
           <!-- Navigation -->
           <nav class="flex gap-1">
             <a href="./" class="nav-link px-3 py-1 rounded text-sm">Dashboard</a>
-            <a href="monitoring.html" class="nav-link px-3 py-1 rounded text-sm">Gateways</a>
+            <a href="gateways.html" class="nav-link px-3 py-1 rounded text-sm">Gateways</a>
             <a href="devices.html" class="nav-link px-3 py-1 rounded text-sm">Devices</a>
             <a href="live.html" class="nav-link active px-3 py-1 rounded text-sm">Packets</a>
           </nav>
@@ -53,10 +53,10 @@
           <!-- Device Filter -->
           <div class="flex items-center gap-2">
             <select id="device-filter-mode" class="px-2 py-1 text-xs w-36">
-              <option value="all">All Devices</option>
-              <option value="owned">Known Devices</option>
-              <option value="foreign">Unknown Devices</option>
-              <option value="chirpstack">ChirpStack Application</option>
+              <option value="all">All DevAddr</option>
+              <option value="owned">Known DevAddr</option>
+              <option value="foreign">Unknown DevAddr</option>
+              <option value="chirpstack">ChirpStack Devices</option>
             </select>
             <button id="reset-filters" class="toggle-btn px-2 py-1 rounded text-xs text-white/40 -mr-2" title="Reset all filters">Reset</button>
           </div>

@@ -29,7 +29,7 @@
     noFilterBar: false,    // skip generating filter bar (page provides its own)
     countEl: null,         // external element for packet count
     storagePrefix: '',     // prefix for localStorage keys
-    csMode: false,         // ChirpStack application mode — renames columns
+    csMode: false,         // ChirpStack Devices mode — renames columns
   };
 
   // Parse UTC timestamp from DB

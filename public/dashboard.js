@@ -294,7 +294,7 @@ function isMyDevice(devAddr) {
 // Gateway Management
 async function loadGateways() {
   const [gwData, csData] = await Promise.all([
-    api('/api/gateways'),
+    api(`/api/gateways?hours=${selectedHours}`),
     filter.mode === 'chirpstack'
       ? api(`/api/cs-gateway-ids?hours=${selectedHours}`)
       : Promise.resolve(null),

@@ -27,8 +27,9 @@ function parseDeviceFilter(filterMode: string, prefixes?: string): DeviceFilter 
 
 export async function gatewayRoutes(fastify: FastifyInstance): Promise<void> {
   // List all gateways
-  fastify.get('/api/gateways', async () => {
-    const gateways = await getGateways();
+  fastify.get<{ Querystring: { hours?: string } }>('/api/gateways', async (request) => {
+    const hours = parseInt(request.query.hours ?? '24', 10);
+    const gateways = await getGateways(hours);
     return { gateways };
   });
 
@@ -66,7 +67,7 @@ export async function gatewayRoutes(fastify: FastifyInstance): Promise<void> {
     return { devices };
   });
 
-  // Get all devices across all gateways with optional filter_mode/source/prefixes/group_name
+  // Get All DevAddr across all gateways with optional filter_mode/source/prefixes/group_name
   fastify.get<{
     Querystring: { hours?: string; limit?: string; group_name?: string; filter_mode?: string; prefixes?: string; source?: string };
   }>('/api/devices', async (request) => {

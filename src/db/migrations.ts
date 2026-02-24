@@ -128,7 +128,7 @@ export async function runMigrations(): Promise<void> {
   await sql`CALL refresh_continuous_aggregate('packets_hourly', NULL, NULL)`;
   await sql`CALL refresh_continuous_aggregate('packets_channel_sf_hourly', NULL, NULL)`;
 
-  // ChirpStack application packets table
+  // ChirpStack Devices packets table
   await sql`
     CREATE TABLE IF NOT EXISTS cs_packets (
       timestamp        TIMESTAMPTZ NOT NULL,

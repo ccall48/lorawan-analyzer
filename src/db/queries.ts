@@ -209,7 +209,7 @@ export async function upsertGateway(
   updateGatewayCache(gatewayId, gwName, gwAlias, gwGroup);
 }
 
-export async function getGateways(): Promise<GatewayStats[]> {
+export async function getGateways(hours: number = 24): Promise<GatewayStats[]> {
   const sql = getDb();
 
   const sqliteRows = await sql<Array<{
@@ -228,38 +228,59 @@ export async function getGateways(): Promise<GatewayStats[]> {
 
   if (sqliteRows.length === 0) return [];
 
-  const stats = await sql<Array<{
-    gateway_id: string;
-    packet_count: string;
-    unique_devices: string;
-    total_airtime_ms: string;
-  }>>`
-    SELECT
-      gateway_id,
-      SUM(packet_count)    AS packet_count,
-      SUM(unique_devices)  AS unique_devices,
-      SUM(airtime_us_sum) / 1000 AS total_airtime_ms
-    FROM packets_hourly
-    WHERE hour >= time_bucket('1 hour', NOW() - INTERVAL '24 hours')
-    GROUP BY gateway_id
-  `;
-  const statsMap = new Map(stats.map(s => [s.gateway_id, s]));
+  // Use packets_hourly for total counts and airtime (efficient)
+  // Use raw packets for unique devices (accurate)
+  const [aggStats, devStats] = await Promise.all([
+    sql<Array<{
+      gateway_id: string;
+      packet_count: string;
+      total_airtime_ms: string;
+    }>>`
+      SELECT
+        gateway_id,
+        SUM(packet_count)    AS packet_count,
+        SUM(airtime_us_sum) / 1000 AS total_airtime_ms
+      FROM packets_hourly
+      WHERE hour >= time_bucket('1 hour', NOW() - make_interval(hours => ${hours}))
+      GROUP BY gateway_id
+    `,
+    sql<Array<{
+      gateway_id: string;
+      unique_devices: string;
+    }>>`
+      SELECT
+        gateway_id,
+        COUNT(DISTINCT dev_addr) AS unique_devices
+      FROM packets
+      WHERE packet_type = 'data'
+        AND dev_addr IS NOT NULL
+        AND timestamp > NOW() - make_interval(hours => ${hours})
+      GROUP BY gateway_id
+    `
+  ]);
+
+  const aggMap = new Map(aggStats.map(s => [s.gateway_id, s]));
+  const devMap = new Map(devStats.map(s => [s.gateway_id, s]));
 
   return sqliteRows
-    .map(gw => ({
-      gateway_id: gw.gateway_id,
-      name: gw.name,
-      alias: gw.alias,
-      group_name: gw.group_name,
-      first_seen: gw.first_seen,
-      last_seen: gw.last_seen,
-      packet_count: Number(statsMap.get(gw.gateway_id)?.packet_count ?? 0),
-      unique_devices: Number(statsMap.get(gw.gateway_id)?.unique_devices ?? 0),
-      total_airtime_ms: Number(statsMap.get(gw.gateway_id)?.total_airtime_ms ?? 0),
-      latitude: gw.latitude,
-      longitude: gw.longitude,
-    }))
-    .filter(gw => gw.packet_count >= 30)
+    .map(gw => {
+      const agg = aggMap.get(gw.gateway_id);
+      const dev = devMap.get(gw.gateway_id);
+      return {
+        gateway_id: gw.gateway_id,
+        name: gw.name,
+        alias: gw.alias,
+        group_name: gw.group_name,
+        first_seen: gw.first_seen,
+        last_seen: gw.last_seen,
+        packet_count: Number(agg?.packet_count ?? 0),
+        unique_devices: Number(dev?.unique_devices ?? 0),
+        total_airtime_ms: Number(agg?.total_airtime_ms ?? 0),
+        latitude: gw.latitude,
+        longitude: gw.longitude,
+      };
+    })
+    .filter(gw => gw.packet_count >= 10)
     .sort((a, b) => b.packet_count - a.packet_count);
 }
 
@@ -1725,7 +1746,7 @@ export async function getRecentPackets(
 }
 
 // ============================================
-// ChirpStack Application Packet Insert (batched)
+// ChirpStack Devices Packet Insert (batched)
 // ============================================
 
 type CsPacketRow = {

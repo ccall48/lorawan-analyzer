@@ -305,7 +305,7 @@ function parseChirpStackAckEvent(frame: Record<string, unknown>): ChirpStackAckE
 }
 
 function handleApplicationUplink(message: Buffer, format: 'protobuf' | 'json'): void {
-  // Always try to parse as JSON for ChirpStack application events
+  // Always try to parse as JSON for ChirpStack Devices events
   // (application integration events are always JSON regardless of gateway bridge format)
   try {
     const frame = JSON.parse(message.toString());
@@ -316,7 +316,7 @@ function handleApplicationUplink(message: Buffer, format: 'protobuf' | 'json'): 
       emitLocation(gwId, loc);
     }
 
-    // Parse as ChirpStack application uplink event and emit to CS handlers
+    // Parse as ChirpStack Devices uplink event and emit to CS handlers
     const csEvent = parseChirpStackUplinkEvent(frame);
     if (csEvent && csUplinkHandlers.length > 0) {
       for (const handler of csUplinkHandlers) {

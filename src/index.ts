@@ -145,7 +145,7 @@ async function main(): Promise<void> {
     });
   });
 
-  // Handle ChirpStack application uplinks
+  // Handle ChirpStack Devices uplinks
   onChirpStackUplink(async (event) => {
     try {
       await insertCsPacket(event);

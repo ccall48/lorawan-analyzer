@@ -11,7 +11,7 @@ let currentView = document.body.dataset.view || 'gateways';
 let selectedHours = 24;
 let selectedGroup = null;
 let searchQuery = '';
-let sortBy = 'last_seen';
+let sortBy = 'packets';
 let filterMode = 'all';
 let myPrefixes = [];
 
@@ -278,7 +278,8 @@ function renderGrid() {
 
 // ---- Data loading ----
 async function loadGateways() {
-  const data = await api('/api/gateways');
+  const params = new URLSearchParams({ hours: selectedHours });
+  const data = await api(`/api/gateways?${params}`);
   allGateways = data.gateways || [];
   buildGroupFilter(allGateways, selectedGroup);
 }
@@ -324,7 +325,7 @@ function pushUrlParams() {
   const p = new URLSearchParams(location.search);
   if (selectedHours !== 24)   p.set('hours', selectedHours);   else p.delete('hours');
   if (selectedGroup)          p.set('group', selectedGroup);   else p.delete('group');
-  if (sortBy !== 'last_seen') p.set('sort', sortBy);           else p.delete('sort');
+  if (sortBy !== 'packets')   p.set('sort', sortBy);           else p.delete('sort');
   if (searchQuery)            p.set('q', searchQuery);         else p.delete('q');
   if (filterMode !== 'all')   p.set('mode', filterMode);       else p.delete('mode');
   const qs = p.toString();
@@ -374,10 +375,6 @@ document.getElementById('device-filter-mode').addEventListener('change', async (
   if (currentView === 'devices') { await loadDevices(); renderGrid(); }
 });
 
-document.getElementById('sort-select').addEventListener('change', (e) => {
-  sortBy = e.target.value; pushUrlParams(); renderGrid();
-});
-
 const searchInput = document.getElementById('search-input');
 const searchClear = document.getElementById('search-clear');
 searchInput.value = searchQuery;
@@ -392,9 +389,8 @@ searchClear.addEventListener('click', () => {
 });
 
 document.getElementById('reset-filters').addEventListener('click', () => {
-  selectedHours = 24; selectedGroup = null; searchQuery = ''; sortBy = 'last_seen'; filterMode = 'all';
+  selectedHours = 24; selectedGroup = null; searchQuery = ''; sortBy = 'packets'; filterMode = 'all';
   searchInput.value = ''; searchClear.classList.add('hidden');
-  document.getElementById('sort-select').value = 'last_seen';
   document.getElementById('device-filter-mode').value = 'all';
   syncTimeButtons(); pushUrlParams(); reloadAll(); connectWebSocket();
 });
