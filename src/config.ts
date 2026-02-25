@@ -10,6 +10,13 @@ const DEFAULT_CONFIG: Config = {
     topic: '#',
     format: 'protobuf',
   },
+  mqttintegration: {
+    server: 'tcp://172.17.0.1:1883',
+    username: '',
+    password: '',
+    topic: '#',
+    format: 'json',
+  },
   postgres: {
     url: 'postgres://lorawan:lorawan@postgres:5432/lorawan',
   },
@@ -31,6 +38,7 @@ export function loadConfig(configPath: string): Config {
 
   return {
     mqtt: { ...DEFAULT_CONFIG.mqtt, ...parsed.mqtt },
+    mqttintegration: { ...DEFAULT_CONFIG.mqttintegration, ...parsed.mqttintegration },
     postgres: { ...DEFAULT_CONFIG.postgres, ...parsed.postgres },
     api: { ...DEFAULT_CONFIG.api, ...parsed.api },
     operators: parsed.operators ?? [],
