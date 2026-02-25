@@ -57,12 +57,11 @@ export function connectMqtt(config: MqttConfig): MqttClient {
   };
 
   console.log(`Connecting to MQTT broker: ${config.server}`);
-  client = mqtt.connect(config.server, options);
+  const client = mqtt.connect(config.server, options); // Use const, not global
 
   client.on('connect', () => {
     console.log('MQTT connected');
-
-    client!.subscribe(config.topic, { qos: 0 }, (err) => {
+    client.subscribe(config.topic, { qos: 0 }, (err) => {
       if (err) {
         console.error(`MQTT subscribe error for ${config.topic}:`, err);
       } else {
