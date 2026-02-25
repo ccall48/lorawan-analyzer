@@ -81,7 +81,10 @@ async function main(): Promise<void> {
   sessionTrackerRef = sessionTracker;
 
   // Connect to MQTT (non-blocking, auto-reconnects)
-  connectMqtt(config.mqtt);
+  const client1 = connectMqtt(config.mqtt);
+
+  // Connect to MQTT (non-blocking, auto-reconnects)
+  const client2 = connectMqtt(config.mqttintegration);
 
   // Handle incoming packets
   onPacket(async (packet: ParsedPacket, gatewayLocation) => {
