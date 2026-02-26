@@ -1,5 +1,5 @@
 import mqtt, { MqttClient, IClientOptions } from 'mqtt';
-import type { MqttConfig, ParsedPacket, ChirpStackUplinkEvent, ChirpStackTxAckEvent, ChirpStackAckEvent, ChirpStackDownlinkEvent } from '../types.js';
+import type { MqttConfig, MqttServerConfig, ParsedPacket, ChirpStackUplinkEvent, ChirpStackTxAckEvent, ChirpStackAckEvent, ChirpStackDownlinkEvent } from '../types.js';
 import { parseUplinkFrame, parseProtobufUplink, extractGatewayLocationFromJSON, extractGatewayLocationFromProtobuf, extractGatewayLocationsFromJSON } from '../parser/uplink.js';
 import type { GatewayLocation } from '../parser/uplink.js';
 import { parseDownlinkFrame, parseProtobufDownlink } from '../parser/downlink.js';
@@ -12,7 +12,7 @@ type ChirpStackTxAckHandler = (event: ChirpStackTxAckEvent) => void;
 type ChirpStackAckHandler = (event: ChirpStackAckEvent) => void;
 type ChirpStackDownlinkHandler = (event: ChirpStackDownlinkEvent) => void;
 
-let client: MqttClient | null = null;
+let clients: MqttClient[] = [];
 let packetHandlers: PacketHandler[] = [];
 let locationHandlers: LocationHandler[] = [];
 let csUplinkHandlers: ChirpStackUplinkHandler[] = [];
@@ -48,7 +48,7 @@ export function removePacketHandler(handler: PacketHandler): void {
   packetHandlers = packetHandlers.filter(h => h !== handler);
 }
 
-export function connectMqtt(config: MqttConfig): MqttClient {
+export function connectMqtt(config: MqttConfig | MqttServerConfig): MqttClient {
   const options: IClientOptions = {
     username: config.username || undefined,
     password: config.password || undefined,
@@ -57,12 +57,13 @@ export function connectMqtt(config: MqttConfig): MqttClient {
   };
 
   console.log(`Connecting to MQTT broker: ${config.server}`);
-  client = mqtt.connect(config.server, options);
+  const newClient = mqtt.connect(config.server, options);
+  clients.push(newClient);
 
-  client.on('connect', () => {
-    console.log('MQTT connected');
+  newClient.on('connect', () => {
+    console.log(`MQTT connected: ${config.server}`);
 
-    client!.subscribe(config.topic, { qos: 0 }, (err) => {
+    newClient.subscribe(config.topic, { qos: 0 }, (err) => {
       if (err) {
         console.error(`MQTT subscribe error for ${config.topic}:`, err);
       } else {
@@ -71,19 +72,19 @@ export function connectMqtt(config: MqttConfig): MqttClient {
     });
   });
 
-  client.on('error', (err) => {
-    console.error('MQTT error:', err.message);
+  newClient.on('error', (err) => {
+    console.error(`MQTT error (${config.server}):`, err.message);
   });
 
-  client.on('reconnect', () => {
-    console.log('MQTT reconnecting...');
+  newClient.on('reconnect', () => {
+    console.log(`MQTT reconnecting: ${config.server}`);
   });
 
-  client.on('message', (topic, message) => {
+  newClient.on('message', (topic, message) => {
     handleMessage(topic, message, config.format);
   });
 
-  return client;
+  return newClient;
 }
 
 type EventType = 'up' | 'ack' | 'down' | 'stats' | 'txack' | 'unknown';
@@ -590,16 +591,12 @@ function decodeMapEntryFromBuffer(data: Buffer): [string, string] | null {
 }
 
 export function getMqttClient(): MqttClient | null {
-  return client;
+  return clients[0] ?? null;
 }
 
 export async function disconnectMqtt(): Promise<void> {
-  if (client) {
-    await new Promise<void>((resolve) => {
-      client!.end(false, {}, () => {
-        client = null;
-        resolve();
-      });
-    });
-  }
+  await Promise.all(clients.map(c => new Promise<void>((resolve) => {
+    c.end(false, {}, () => resolve());
+  })));
+  clients = [];
 }

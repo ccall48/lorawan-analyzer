@@ -33,6 +33,20 @@ format = "protobuf"
 # prefix = ["26011234/32", "26015678/32"]
 # name = "My Other Network"
 
+# Additional MQTT servers (optional)
+# Use [[mqtt_servers]] to connect to multiple MQTT brokers simultaneously.
+# Each entry is independent — packets from all brokers are merged into the same database.
+#
+# [[mqtt_servers]]
+# server = "tcp://chirpstack2.example.com:1883"
+# username = ""
+# password = ""
+# format = "protobuf"
+#
+# [[mqtt_servers]]
+# server = "tcp://chirpstack3.example.com:1883"
+# format = "json"
+
 # Hide rules - hide traffic matching these prefixes from the dashboard (optional)
 # [[hide_rules]]
 # type = "dev_addr"

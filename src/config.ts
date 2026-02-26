@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import toml from 'toml';
-import type { Config } from './types.js';
+import type { Config, MqttServerConfig } from './types.js';
 
 const DEFAULT_CONFIG: Config = {
   mqtt: {
@@ -18,6 +18,7 @@ const DEFAULT_CONFIG: Config = {
   },
   operators: [],
   hide_rules: [],
+  mqtt_servers: [],
 };
 
 export function loadConfig(configPath: string): Config {
@@ -27,7 +28,7 @@ export function loadConfig(configPath: string): Config {
   }
 
   const content = readFileSync(configPath, 'utf-8');
-  const parsed = toml.parse(content) as Partial<Config>;
+  const parsed = toml.parse(content) as Partial<Config> & { mqtt_servers?: Array<Partial<MqttServerConfig>> };
 
   return {
     mqtt: { ...DEFAULT_CONFIG.mqtt, ...parsed.mqtt },
@@ -35,5 +36,12 @@ export function loadConfig(configPath: string): Config {
     api: { ...DEFAULT_CONFIG.api, ...parsed.api },
     operators: parsed.operators ?? [],
     hide_rules: parsed.hide_rules ?? [],
+    mqtt_servers: (parsed.mqtt_servers ?? []).map(s => ({
+      server:   s.server   ?? DEFAULT_CONFIG.mqtt.server,
+      username: s.username ?? '',
+      password: s.password ?? '',
+      topic:    s.topic    ?? DEFAULT_CONFIG.mqtt.topic,
+      format:   s.format   ?? DEFAULT_CONFIG.mqtt.format,
+    })),
   };
 }

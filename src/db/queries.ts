@@ -212,7 +212,7 @@ export async function upsertGateway(
 export async function getGateways(hours: number = 24): Promise<GatewayStats[]> {
   const sql = getDb();
 
-  const sqliteRows = await sql<Array<{
+  const gateways = await sql<Array<{
     gateway_id: string;
     name: string | null;
     alias: string | null;
@@ -226,7 +226,7 @@ export async function getGateways(hours: number = 24): Promise<GatewayStats[]> {
     FROM gateways
   `;
 
-  if (sqliteRows.length === 0) return [];
+  if (gateways.length === 0) return [];
 
   // Use packets_hourly for total counts and airtime (efficient)
   // Use raw packets for unique devices (accurate)
@@ -262,7 +262,7 @@ export async function getGateways(hours: number = 24): Promise<GatewayStats[]> {
   const aggMap = new Map(aggStats.map(s => [s.gateway_id, s]));
   const devMap = new Map(devStats.map(s => [s.gateway_id, s]));
 
-  return sqliteRows
+  return gateways
     .map(gw => {
       const agg = aggMap.get(gw.gateway_id);
       const dev = devMap.get(gw.gateway_id);

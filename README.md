@@ -54,6 +54,19 @@ If unsure, check your ChirpStack `docker-compose.yml` for the mosquitto/EMQX ser
 
 ### 2. Start
 
+#### Upgrading from the ClickHouse version
+
+If you were running the previous version (ClickHouse + SQLite), the old data is incompatible. Start fresh:
+
+```bash
+rm -rf data/
+docker compose up -d
+```
+
+No migration path is provided — just delete the old `data/` directory and let the new Postgres container initialize.
+
+#### Fresh start
+
 ```bash
 docker compose up -d
 ```
@@ -93,9 +106,27 @@ known_devices = true
 
 Prefix format: `AABBCCDD/N` -- the upper N bits of the DevAddr are compared. `26000000/20` matches any DevAddr starting with `0x26000...`.
 
+### Multiple MQTT Servers
+
+Connect to more than one MQTT broker simultaneously. Packets from all brokers are merged into the same database. Add one `[[mqtt_servers]]` block per extra broker in `config.toml`:
+
+```toml
+[[mqtt_servers]]
+server = "tcp://chirpstack2.example.com:1883"
+username = ""
+password = ""
+format = "protobuf"
+
+[[mqtt_servers]]
+server = "tcp://chirpstack3.example.com:1883"
+format = "json"
+```
+
+The primary `[mqtt]` section is always connected. Each `[[mqtt_servers]]` entry adds an additional connection.
+
 ### Gateway Names (`gateways.csv`)
 
-Place a `gateways.csv` file next to `config.toml` to pre-seed gateway names and map coordinates. The file is read at startup — gateways are registered before any packets arrive, so named tabs appear immediately on the dashboard even on a fresh install.
+Place a `gateways.csv` file at `./data/gateways.csv` (next to `docker-compose.yml`) to pre-seed gateway names and map coordinates. The file is read at startup — gateways are registered before any packets arrive, so named tabs appear immediately on the dashboard even on a fresh install.
 
 ```csv
 id,name,alias,latitude,longitude
@@ -115,6 +146,7 @@ id,name,alias,latitude,longitude
 - `name` is used as the display label; omit or leave blank to show the raw gateway ID
 - `latitude`/`longitude` must both be present to place a pin on the gateway map
 - If a gateway already exists in the database, only the fields present in the CSV overwrite existing values; existing data is preserved otherwise
+- In Docker: place the file at `./data/gateways.csv` (the `data/` directory is already volume-mounted)
 - The file is optional — the analyzer starts normally if it is absent
 
 ### Hide Rules

@@ -67,7 +67,7 @@ async function main(): Promise<void> {
   console.log(`Pre-populated CS device cache: ${cachedDevices.length} devices`);
 
   // Seed gateway names from gateways.csv if present
-  const csvPath = path.resolve(path.dirname(path.resolve(CONFIG_PATH)), 'gateways.csv');
+  const csvPath = path.resolve(path.dirname(path.resolve(CONFIG_PATH)), 'data', 'gateways.csv');
   await seedGatewaysFromCsv(csvPath);
 
   // Load custom operators from DB and config
@@ -82,6 +82,9 @@ async function main(): Promise<void> {
 
   // Connect to MQTT (non-blocking, auto-reconnects)
   connectMqtt(config.mqtt);
+  for (const srv of config.mqtt_servers ?? []) {
+    connectMqtt(srv);
+  }
 
   // Handle incoming packets
   onPacket(async (packet: ParsedPacket, gatewayLocation) => {

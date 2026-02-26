@@ -4,6 +4,7 @@ export interface Config {
   api: ApiConfig;
   operators: OperatorMapping[];
   hide_rules: HideRule[];
+  mqtt_servers?: MqttServerConfig[];
 }
 
 export interface MqttConfig {
@@ -12,10 +13,9 @@ export interface MqttConfig {
   password: string;
   topic: string;
   format: 'protobuf' | 'json';
-  downlink_sources?: MqttDownlinkSource[];
 }
 
-export interface MqttDownlinkSource {
+export interface MqttServerConfig {
   server: string;
   username?: string;
   password?: string;
