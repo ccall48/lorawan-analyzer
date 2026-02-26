@@ -9,7 +9,7 @@ Real-time LoRaWAN traffic analyzer for ChirpStack. Captures uplinks, downlinks, 
 ## Features
 
 - **Dashboard** -- gateway tabs, operator/device tree, traffic charts, channel/SF distribution, duty cycle, device breakdown
-- **Device detail view** -- per-device FCnt timeline, packet loss, RSSI/SNR trends, interval histogram, SF/frequency/gateway distributions
+- **Device detail** -- per-device FCnt timeline, packet loss, RSSI/SNR trends, interval histogram, SF/frequency/gateway distributions
 - **Live packet feed** -- real-time WebSocket stream with packet type, RSSI range, and ownership filters
 - **Operator identification** -- built-in LoRa Alliance NetID database (175+ operators), plus custom prefix mappings
 - **Visibility filtering** -- separate "my devices" from foreign traffic using DevAddr prefix rules
@@ -19,76 +19,65 @@ Real-time LoRaWAN traffic analyzer for ChirpStack. Captures uplinks, downlinks, 
 
 ## Setup
 
-The analyzer connects directly to your ChirpStack installation's MQTT broker -- the same one that ChirpStack Gateway Bridge publishes to. No extra MQTT server needed.
-
-### 1. Configure MQTT
+### 1. Configure
 
 ```bash
 cp config.toml.example config.toml
 ```
 
-Edit `config.toml` and set `mqtt.server` to your ChirpStack MQTT broker:
+Edit `config.toml` and point `mqtt.server` at your ChirpStack MQTT broker (the same one ChirpStack Gateway Bridge publishes to):
 
 ```toml
 [mqtt]
 server = "tcp://your-chirpstack-mqtt:1883"
 username = ""
 password = ""
-topic = "eu868/gateway/+/event/up"
 format = "protobuf"
 ```
 
-- **`server`** -- the MQTT broker that ChirpStack Gateway Bridge publishes to
-- **`topic`** -- the region prefix (`eu868`, `us915`, `as923`, etc.) must match your Gateway Bridge config. The analyzer automatically derives downlink and ack topics from this.
+- **`server`** -- MQTT broker address
 - **`format`** -- `protobuf` for ChirpStack v4 (default), `json` for v3 or JSON marshaler
 
-**Finding your MQTT broker address from Docker:**
+**Common broker addresses (Docker):**
 
 | ChirpStack setup | `mqtt.server` value |
 |---|---|
-| On the same host, separate compose project | `tcp://host.docker.internal:1883` or `tcp://172.17.0.1:1883` |
-| In the same Docker network | `tcp://<mosquitto-container-name>:1883` |
+| Same host, separate compose project | `tcp://host.docker.internal:1883` or `tcp://172.17.0.1:1883` |
+| Same Docker network | `tcp://<mosquitto-container-name>:1883` |
 | Remote host | `tcp://chirpstack.example.com:1883` |
 
-If unsure, check your ChirpStack `docker-compose.yml` for the mosquitto/EMQX service name, or your `chirpstack-gateway-bridge.toml` for the MQTT server address.
+If unsure, check your ChirpStack `docker-compose.yml` for the mosquitto/EMQX service name, or `chirpstack-gateway-bridge.toml` for the MQTT server address.
 
 ### 2. Start
 
-#### Upgrading from the ClickHouse version
-
-If you were running the previous version (ClickHouse + SQLite), the old data is incompatible. Start fresh:
-
-```bash
-rm -rf data/
-docker compose up -d
-```
-
-No migration path is provided — just delete the old `data/` directory and let the new Postgres container initialize.
-
-#### Fresh start
-
 ```bash
 docker compose up -d
 ```
-
-This starts two containers:
 
 | Container | Port | Description |
 |---|---|---|
 | `lorawan-analyzer` | `15337` | Web dashboard + API |
 | `lorawan-postgres` | -- | Postgres + TimescaleDB (internal only) |
 
-Dashboard at [http://localhost:15337](http://localhost:15337). Packets appear as soon as gateways publish to the broker.
-
-To check logs:
+Dashboard: [http://localhost:15337](http://localhost:15337)
 
 ```bash
 docker compose logs -f analyzer
 ```
 
+> **Upgrading from the ClickHouse version?** The old data is incompatible. Delete `data/` before starting: `rm -rf data/ && docker compose up -d`
+
+## Configuration
+
+### ChirpStack Devices
+
+The **DevAddr** dropdown on the Live page has a **ChirpStack Devices** option. When selected, the live feed switches from gateway-sourced packets to the application-level MQTT stream — packets are enriched with ChirpStack device names and application names instead of raw DevAddr labels. The device list in the sidebar also switches to show ChirpStack-registered devices grouped by application.
+
+This mode requires that the analyzer is connected to the same MQTT broker as ChirpStack (the default setup). No extra config is needed.
+
 ### Custom Operators
 
-Label your own networks. These override the built-in NetID database:
+Label your own networks by DevAddr prefix. These override the built-in NetID database:
 
 ```toml
 [[operators]]
@@ -106,15 +95,27 @@ known_devices = true
 
 Prefix format: `AABBCCDD/N` -- the upper N bits of the DevAddr are compared. `26000000/20` matches any DevAddr starting with `0x26000...`.
 
+Operators can also be defined without a prefix to assign a color to a ChirpStack application name. When the live feed is in **ChirpStack Devices** mode, packets are grouped by `application_name`; entries here are matched by name and used to set the color in the dashboard:
+
+```toml
+[[operators]]
+name = "Hydrogen"
+color = "#3b82f6"
+
+[[operators]]
+name = "Ozone"
+color = "#a855f7"
+```
+
+The `name` must exactly match the application name as it appears in ChirpStack.
+
 ### Multiple MQTT Servers
 
-Connect to more than one MQTT broker simultaneously. Packets from all brokers are merged into the same database. Add one `[[mqtt_servers]]` block per extra broker in `config.toml`:
+Connect to more than one broker simultaneously. Packets from all brokers are merged into the same database:
 
 ```toml
 [[mqtt_servers]]
 server = "tcp://chirpstack2.example.com:1883"
-username = ""
-password = ""
 format = "protobuf"
 
 [[mqtt_servers]]
@@ -126,7 +127,7 @@ The primary `[mqtt]` section is always connected. Each `[[mqtt_servers]]` entry 
 
 ### Gateway Names (`gateways.csv`)
 
-Place a `gateways.csv` file at `./data/gateways.csv` (next to `docker-compose.yml`) to pre-seed gateway names and map coordinates. The file is read at startup — gateways are registered before any packets arrive, so named tabs appear immediately on the dashboard even on a fresh install.
+Place `data/gateways.csv` (next to `docker-compose.yml`) to pre-seed gateway names and map coordinates. Gateways are registered at startup, so named tabs appear immediately even before any packets arrive.
 
 ```csv
 id,name,alias,latitude,longitude
@@ -138,16 +139,11 @@ id,name,alias,latitude,longitude
 | Column | Required | Description |
 |--------|----------|-------------|
 | `id` | yes | Gateway EUI (hex, lowercase) |
-| `name` | no | Display name shown in tabs and map popups |
-| `alias` | no | Ignored (reserved) |
-| `latitude` | no | Decimal latitude for map pin |
-| `longitude` | no | Decimal longitude for map pin |
+| `name` | no | Display label (falls back to raw ID if blank) |
+| `alias` | no | Reserved |
+| `latitude` / `longitude` | no | Both required to place a map pin |
 
-- `name` is used as the display label; omit or leave blank to show the raw gateway ID
-- `latitude`/`longitude` must both be present to place a pin on the gateway map
-- If a gateway already exists in the database, only the fields present in the CSV overwrite existing values; existing data is preserved otherwise
-- In Docker: place the file at `./data/gateways.csv` (the `data/` directory is already volume-mounted)
-- The file is optional — the analyzer starts normally if it is absent
+If a gateway already exists in the database, only the CSV fields that are present overwrite existing values. The file is optional.
 
 ### Hide Rules
 
@@ -160,13 +156,13 @@ prefix = "26000000/20"
 description = "Hide my sensors"
 ```
 
-Both operators and hide rules can also be managed at runtime via the API (see below).
+Operators and hide rules can also be managed at runtime via the API.
 
-All other settings have sensible defaults for Docker -- see [`config.toml.example`](config.toml.example) for details.
+See [`config.toml.example`](config.toml.example) for all available settings.
 
 ## API
 
-Most endpoints accept `hours` (time window, default varies) and `gateway_id` (filter by gateway) query parameters. Endpoints returning device data also support `filter_mode` (`owned`/`foreign`/`all`) and `prefixes` (comma-separated `HEX/bits` list).
+Most endpoints accept `hours` (time window) and `gateway_id` (filter by gateway) query parameters. Endpoints returning device data also support `filter_mode` (`owned`/`foreign`/`all`) and `prefixes` (comma-separated `HEX/bits` list).
 
 ### Gateways
 
@@ -205,7 +201,7 @@ Most endpoints accept `hours` (time window, default varies) and `gateway_id` (fi
 |----------|-------------|
 | `GET /api/stats/summary` | Overview stats (packets, devices, airtime, duty cycle) |
 | `GET /api/stats/operators` | Per-operator breakdown |
-| `GET /api/stats/timeseries` | Time series data (accepts `interval`, `metric`, `group_by`) |
+| `GET /api/stats/timeseries` | Time series (accepts `interval`, `metric`, `group_by`) |
 | `GET /api/stats/duty-cycle` | Duty cycle stats |
 | `GET /api/stats/downlinks` | Downlink / TX ack stats |
 | `GET /api/packets/recent` | Recent packets (accepts `packet_types`, `rssi_min`, `rssi_max`) |
