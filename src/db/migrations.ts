@@ -41,8 +41,6 @@ export async function runMigrations(): Promise<void> {
 
   await sql`SELECT create_hypertable('packets', 'timestamp', if_not_exists => TRUE)`;
   await sql`SELECT add_retention_policy('packets', INTERVAL '8 days', if_not_exists => TRUE)`;
-  await sql`SELECT add_retention_policy('packets_hourly', INTERVAL '8 days', if_not_exists => TRUE)`;
-  await sql`SELECT add_retention_policy('packets_channel_sf_hourly', INTERVAL '8 days', if_not_exists => TRUE)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS gateways (
@@ -97,6 +95,7 @@ export async function runMigrations(): Promise<void> {
       schedule_interval => INTERVAL '2 minutes',
       if_not_exists     => TRUE)
   `;
+  await sql`SELECT add_retention_policy('packets_hourly', INTERVAL '8 days', if_not_exists => TRUE)`;
 
   await sql`
     CREATE MATERIALIZED VIEW IF NOT EXISTS packets_channel_sf_hourly
@@ -119,6 +118,7 @@ export async function runMigrations(): Promise<void> {
       schedule_interval => INTERVAL '2 minutes',
       if_not_exists     => TRUE)
   `;
+  await sql`SELECT add_retention_policy('packets_channel_sf_hourly', INTERVAL '8 days', if_not_exists => TRUE)`;
 
   await sql`CREATE INDEX IF NOT EXISTS packets_gateway_ts_idx ON packets (gateway_id, timestamp DESC)`;
   await sql`CREATE INDEX IF NOT EXISTS packets_dev_addr_ts_idx ON packets (dev_addr, timestamp DESC) WHERE dev_addr IS NOT NULL`;
